@@ -4,7 +4,8 @@ Installation:
 
     pip3 install --user -r requirements.txt
 
+Make sure that `pytest` is on your path before proceeding.
+
 Running:
 
-    npm run bidi-server &
-    python3 test.py
+    npm run bidi-server & pytest
