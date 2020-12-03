@@ -15,4 +15,7 @@ jobs:
         with:
           python-version: 3.8
       - run: pip install -r bidiClient/requirements.txt
-      - run: npm run bidi-server & pytest bidiClient/
+      - run: npm run bidi-server & python -m pytest bidiClient/
+
+env:
+  FORCE_COLOR: 3
