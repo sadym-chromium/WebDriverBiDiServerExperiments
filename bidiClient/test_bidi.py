@@ -8,9 +8,8 @@ import websockets
 async def websocket():
     port = os.getenv('PORT', 8080)
     url = f'ws://localhost:{port}'
-    connection = await websockets.connect(url)
-    yield connection
-    await connection.close()
+    async with websockets.connect(url) as connection:
+        yield connection
 
 @pytest.mark.asyncio
 async def test_empty(websocket):
