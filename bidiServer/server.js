@@ -50,6 +50,78 @@ function originIsAllowed(origin) {
 
 const sessions = {};
 
+function jsonType(value) {
+  if (value === null) {
+    return 'null';
+  }
+  if (Array.isArray(value)) {
+    return 'array';
+  }
+  return typeof value;
+}
+
+function matchData(data) {
+  let parsed;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    throw new Error('Cannot parse data as JSON');
+  }
+
+  const parsedType = jsonType(parsed);
+  if (parsedType !== 'object') {
+    throw new Error(`Expected JSON object but got ${parsedType}`);
+  }
+
+  // Extract amd validate id, method and params.
+  const {id, method, params} = parsed;
+
+  const idType = jsonType(id);
+  if (idType !== 'number' || !Number.isInteger(id) || id < 0) {
+    // TODO: should uint64_t be the upper limit?
+    // https://tools.ietf.org/html/rfc7049#section-2.1
+    throw new Error(`Expected unsigned integer but got ${idType}`);
+  }
+
+  const methodType = jsonType(method);
+  if (methodType !== 'string') {
+    throw new Error(`Expected string method but got ${methodType}`);
+  }
+
+  const paramsType = jsonType(params);
+  if (paramsType !== 'object') {
+    throw new Error(`Expected object params but got ${paramsType}`);
+  }
+
+  return {id, method, params};
+}
+
+// https://w3c.github.io/webdriver-bidi/#respond-with-an-error
+function respondWithError(connection, data, code, message) {
+  // TODO: this is bizarre per spec. We reparse the payload and
+  // extract the ID, regardless of what kind of value it was.
+  let commandId = null;
+  try {
+    const parsed = JSON.parse(data);
+    if (jsonType(parsed) === 'object' && 'id' in parsed) {
+      commandId = parsed.id;
+    }
+  } catch {}
+
+  const errorData = {
+    id: commandId,
+    error: code,
+    message,
+    // TODO: optional stacktrace field
+  };
+
+  const response = JSON.stringify(errorData);
+
+  connection.sendUTF(response);
+
+  console.log('Sent error response:', response);
+}
+
 wsServer.on('request', function (request) {
   if (!originIsAllowed(request.origin)) {
     // Make sure we only accept requests from an allowed origin
@@ -67,112 +139,119 @@ wsServer.on('request', function (request) {
    }
 
   console.log((new Date()) + ' Connection accepted.');
+
+  // https://w3c.github.io/webdriver-bidi/#handle-an-incoming-message
   connection.on('message', async function (message) {
     console.log('message: ', message);
-    if (message.type === 'utf8' ) {
-      console.log('Received Message: ' + message.utf8Data);
-
-      let parsedMessage;
-      try {
-        parsedMessage = JSON.parse(message.utf8Data);
-      } catch (e) {
-        console.log("Cannot parse JSON: ", e);
-        connection.sendUTF("Didn't get ya (");
-        return;
-      }
-
-      const messageId = parsedMessage.id;
-      let sessionID = parsedMessage.sessionID;
-      let pageID = parsedMessage.pageID;
-
-      const response = {};
-      if (!!messageId) {
-        response.id = messageId;
-      }
-      if (!!sessionID) {
-        response.sessionID = sessionID;
-      }
-      if (!!pageID) {
-        response.pageID = pageID;
-      }
-
-      let browser, page;
-      switch (parsedMessage.method) {
-        case "launch":
-          browser = await puppeteer.launch({ headless: false });
-
-          sessionID = uuid();
-          sessions[sessionID] = {
-            browser: browser,
-            pages: {}
-          };
-          response.sessionID = sessionID;
-          break;
-        case "newPage":
-          if (!(sessionID in sessions)) {
-            response.message = 'missing sessionID';
-            break;
-          }
-
-          browser = sessions[sessionID].browser;
-          page = await browser.newPage();
-
-          pageID = uuid();
-          sessions[sessionID].pages[pageID] = page;
-
-          response.pageID = pageID;
-          response.message = 'done';
-          break;
-        case "goto":
-          if (!(sessionID in sessions)) {
-            response.message = 'missing sessionID';
-            break;
-          }
-          if (!(pageID in sessions[sessionID].pages)) {
-            response.message = 'missing sessionID';
-            break;
-          }
-          let params = parsedMessage.params;
-          if (!params) {
-            response.message = 'missing params';
-            break;
-          }
-          if (!params.url) {
-            response.message = 'missing params.url';
-            break;
-          }
-
-          page = sessions[sessionID].pages[pageID];
-          await page.goto(params.url);
-          response.message = 'done';
-          break;
-        case "screenshot":
-          if (!(sessionID in sessions)) {
-            response.message = 'missing sessionID';
-            break;
-          }
-          if (!(pageID in sessions[sessionID].pages)) {
-            response.message = 'missing sessionID';
-            break;
-          }
-
-          page = sessions[sessionID].pages[pageID];
-          let screenshot = await page.screenshot({ encoding: 'base64'});
-          response.screenshot = screenshot;
-          response.message = 'done';
-          break;
-        default:
-          response.message = 'unknown method `' + parsedMessage.method+'`';
-      }
-
-      const responseStr = JSON.stringify(response);
-
-      console.log('Sent response: ' + responseStr);
-
-      connection.sendUTF(responseStr);
-    } else {
-      connection.sendUTF("Didn't get ya (");
+    // 1. If |type| is not text, return.
+    if (message.type !== 'utf8' ) {
+      console.log(`Silently ignoring non-text (${message.type}) message`);
+      return;
     }
+
+    const data = message.utf8Data;
+
+    // 2. Assert: |data| is a scalar value string, because the WebSocket
+    //    handling errors in UTF-8-encoded data would already have
+    //    failed the WebSocket connection otherwise.
+    // TODO: Is this already handled correctly by the websocket library?
+
+    console.log('Received Message: ' + data);
+
+    // 3. Match |data| against the remote end definition.
+    let parsed;
+    try {
+      parsed = matchData(data);
+    } catch (e) {
+      respondWithError(connection, data, "invalid argument", e.message);
+      return;
+    }
+
+    let sessionID; // TODO: always undefined
+    let pageID;  // TODO: always undefined
+
+    const response = {};
+    response.id = parsed.id;
+
+    if (!!sessionID) {
+      response.sessionID = sessionID;
+    }
+    if (!!pageID) {
+      response.pageID = pageID;
+    }
+
+    let browser, page;
+    switch (parsed.method) {
+      case "launch":
+        browser = await puppeteer.launch({ headless: false });
+
+        sessionID = uuid();
+        sessions[sessionID] = {
+          browser: browser,
+          pages: {}
+        };
+        response.sessionID = sessionID;
+        break;
+      case "newPage":
+        if (!(sessionID in sessions)) {
+          response.message = 'missing sessionID';
+          break;
+        }
+
+        browser = sessions[sessionID].browser;
+        page = await browser.newPage();
+
+        pageID = uuid();
+        sessions[sessionID].pages[pageID] = page;
+
+        response.pageID = pageID;
+        response.message = 'done';
+        break;
+      case "goto":
+        if (!(sessionID in sessions)) {
+          response.message = 'missing sessionID';
+          break;
+        }
+        if (!(pageID in sessions[sessionID].pages)) {
+          response.message = 'missing sessionID';
+          break;
+        }
+        let params = parsed.params;
+        if (!params.url) {
+          response.message = 'missing params.url';
+          break;
+        }
+
+        page = sessions[sessionID].pages[pageID];
+        await page.goto(params.url);
+        response.message = 'done';
+        break;
+      case "screenshot":
+        if (!(sessionID in sessions)) {
+          response.message = 'missing sessionID';
+          break;
+        }
+        if (!(pageID in sessions[sessionID].pages)) {
+          response.message = 'missing sessionID';
+          break;
+        }
+
+        page = sessions[sessionID].pages[pageID];
+        let screenshot = await page.screenshot({ encoding: 'base64'});
+        response.screenshot = screenshot;
+        response.message = 'done';
+        break;
+      default:
+        respondWithError(connection, data, 'unknown command',
+            `unknown method ${parsed.method}`);
+        return;
+    }
+
+    const responseStr = JSON.stringify(response);
+
+    console.log('Sent response: ' + responseStr);
+
+    connection.sendUTF(responseStr);
   });
   connection.on('close', function (reasonCode, description) {
     console.log((new Date()) + ' Peer ' + connection.remoteAddress + ' disconnected.');
