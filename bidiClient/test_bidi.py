@@ -5,11 +5,44 @@ import pytest
 import websockets
 
 @pytest.fixture
-async def websocket():
-    port = os.getenv('PORT', 8080)
+async def server():
+    port = os.getenv('PORT')
+    if port:
+        url = f'ws://localhost:{port}'
+        print(f'Using existing server ({url})')
+        yield url
+        # no tearndown, server will keep running
+        return
+
+    port = 8080 # must match server.js default
+
+    proc = await asyncio.create_subprocess_shell(
+        'npm run bidi-server',
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE)
+
+    while True:
+        if proc.returncode != None:
+            raise Exception(f'Fixture server failed to start, port {port} already in use?')
+        line = await proc.stdout.readline()
+        if b'Server is listening' in line:
+            break
+
     url = f'ws://localhost:{port}'
-    async with websockets.connect(url) as connection:
-        yield connection
+    print(f'Started fixture server ({url})')
+    yield url
+
+    proc.terminate()
+    stdout, stderr = await proc.communicate()
+    # TODO: somehow show the logs on failure:
+    #print(proc.returncode)
+    #print(stdout)
+    #print(stderr)
+
+@pytest.fixture
+async def websocket(server):
+    async with websockets.connect(server) as websocket:
+        yield websocket
 
 # Tests for "handle an incoming message" error handling, when the message
 # can't be decoded as known command.
