@@ -43,3 +43,12 @@ async def test_empty_object(websocket):
     assert resp['id'] == None
     assert resp['error'] == 'invalid argument'
     assert isinstance(resp['message'], str)
+
+@pytest.mark.asyncio
+async def test_session_status(websocket):
+    command = {"id": 5, "method": "session.status", "params": {}}
+    await websocket.send(json.dumps(command))
+    resp = json.loads(await websocket.recv())
+    assert resp['id'] == 5
+    assert resp['value']['ready'] == True
+    assert resp['value']['message'] == 'ready'
