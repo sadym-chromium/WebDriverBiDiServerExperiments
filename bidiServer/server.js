@@ -48,8 +48,6 @@ function originIsAllowed(origin) {
   return true;
 }
 
-const sessions = {};
-
 function jsonType(value) {
   if (value === null) {
     return 'null';
@@ -96,33 +94,38 @@ function matchData(data) {
   return {id, method, params};
 }
 
-// https://w3c.github.io/webdriver-bidi/#respond-with-an-error
-function respondWithError(connection, data, code, message) {
+function getErrorResponse(plainCommandData, errorCode, errorMessage) {
   // TODO: this is bizarre per spec. We reparse the payload and
   // extract the ID, regardless of what kind of value it was.
   let commandId = null;
   try {
-    const parsed = JSON.parse(data);
-    if (jsonType(parsed) === 'object' && 'id' in parsed) {
-      commandId = parsed.id;
+    const commandData = JSON.parse(plainCommandData);
+    if (jsonType(commandData) === 'object' && 'id' in commandData) {
+      commandId = commandData.id;
     }
-  } catch {}
+  } catch { }
 
-  const errorData = {
+  return {
     id: commandId,
-    error: code,
-    message,
+    error: errorCode,
+    message: errorMessage,
     // TODO: optional stacktrace field
   };
+}
 
-  const response = JSON.stringify(errorData);
-
+// https://w3c.github.io/webdriver-bidi/#respond-with-an-error
+function respondWithError(connection, plainCommandData, errorCode, errorMessage) {
+  const response = JSON.stringify(getErrorResponse(plainCommandData, errorCode, errorMessage));
   connection.sendUTF(response);
 
   console.log('Sent error response:', response);
 }
 
-wsServer.on('request', function (request) {
+wsServer.on('request', async function (request) {
+  console.log("!!@@## request");
+  // A session per connection.
+  const session = { pages: {} };
+
   if (!originIsAllowed(request.origin)) {
     // Make sure we only accept requests from an allowed origin
     request.reject();
@@ -131,6 +134,8 @@ wsServer.on('request', function (request) {
   }
 
   try {
+    // Launch browser for the newly created session.
+    session.browser = await puppeteer.launch({ headless: false });
     var connection = request.accept();
   } catch (e) {
     console.log("Connection rejected: ", e);
@@ -149,111 +154,92 @@ wsServer.on('request', function (request) {
       return;
     }
 
-    const data = message.utf8Data;
+    const plainCommandData = message.utf8Data;
 
     // 2. Assert: |data| is a scalar value string, because the WebSocket
     //    handling errors in UTF-8-encoded data would already have
     //    failed the WebSocket connection otherwise.
     // TODO: Is this already handled correctly by the websocket library?
 
-    console.log('Received Message: ' + data);
+    console.log('Received Message: ' + plainCommandData);
 
     // 3. Match |data| against the remote end definition.
-    let parsed;
+    let commandData;
     try {
-      parsed = matchData(data);
+      commandData = matchData(plainCommandData);
     } catch (e) {
-      respondWithError(connection, data, "invalid argument", e.message);
+      respondWithError(connection, plainCommandData, "invalid argument", e.message);
       return;
     }
 
-    let sessionID; // TODO: always undefined
-    let pageID;  // TODO: always undefined
-
-    const response = {};
-    response.id = parsed.id;
-
-    if (!!sessionID) {
-      response.sessionID = sessionID;
+    try {
+      const response = await processCommand(commandData, session);
+      const responseStr = JSON.stringify(response);
+      connection.sendUTF(responseStr);
+      console.log('Sent response: ' + responseStr);
+      return;
+    } catch (e) {
+      respondWithError(connection, plainCommandData, "error processing command", e.message);
+      return;
     }
-    if (!!pageID) {
-      response.pageID = pageID;
-    }
-
-    let browser, page;
-    switch (parsed.method) {
-      case "launch":
-        browser = await puppeteer.launch({ headless: false });
-
-        sessionID = uuid();
-        sessions[sessionID] = {
-          browser: browser,
-          pages: {}
-        };
-        response.sessionID = sessionID;
-        break;
-      case "newPage":
-        if (!(sessionID in sessions)) {
-          response.message = 'missing sessionID';
-          break;
-        }
-
-        browser = sessions[sessionID].browser;
-        page = await browser.newPage();
-
-        pageID = uuid();
-        sessions[sessionID].pages[pageID] = page;
-
-        response.pageID = pageID;
-        response.message = 'done';
-        break;
-      case "goto":
-        if (!(sessionID in sessions)) {
-          response.message = 'missing sessionID';
-          break;
-        }
-        if (!(pageID in sessions[sessionID].pages)) {
-          response.message = 'missing sessionID';
-          break;
-        }
-        let params = parsed.params;
-        if (!params.url) {
-          response.message = 'missing params.url';
-          break;
-        }
-
-        page = sessions[sessionID].pages[pageID];
-        await page.goto(params.url);
-        response.message = 'done';
-        break;
-      case "screenshot":
-        if (!(sessionID in sessions)) {
-          response.message = 'missing sessionID';
-          break;
-        }
-        if (!(pageID in sessions[sessionID].pages)) {
-          response.message = 'missing sessionID';
-          break;
-        }
-
-        page = sessions[sessionID].pages[pageID];
-        let screenshot = await page.screenshot({ encoding: 'base64'});
-        response.screenshot = screenshot;
-        response.message = 'done';
-        break;
-      default:
-        respondWithError(connection, data, 'unknown command',
-            `unknown method ${parsed.method}`);
-        return;
-    }
-
-    const responseStr = JSON.stringify(response);
-
-    console.log('Sent response: ' + responseStr);
-
-    connection.sendUTF(responseStr);
   });
   connection.on('close', function (reasonCode, description) {
     console.log((new Date()) + ' Peer ' + connection.remoteAddress + ' disconnected.');
   });
 });
+
+function getPage(commandData, session) {
+  if (!(commandData.pageID in session.pages)) {
+    throw new Error('page not found');
+  }
+
+  return session.pages[commandData.pageID];
+}
+
+async function processCommand(commandData, session) {
+  const response = {};
+  response.id = commandData.id;
+
+  switch (commandData.method) {
+    case "newPage":
+      return await processNewPage(commandData.params, session, response);
+    case "goto":
+      return await processGoto(commandData.params, session, response);
+    case "screenshot":
+      return await processScreenshot(commandData.params, session, response);
+    default:
+      throw new Error('unknown command');
+  }
+}
+
+async function processNewPage(params, session, response) {
+  const page = await session.browser.newPage();
+
+  const pageID = uuid();
+  session.pages[pageID] = page;
+
+  response.pageID = pageID;
+  response.message = 'done';
+
+  return response;
+}
+
+async function processGoto(params, session, response) {
+  const page = getPage(params, session);
+
+  if (!params.url) {
+    throw new Error('missing params.url');
+  }
+
+  await page.goto(params.url);
+  response.message = 'done';
+  return response;
+}
+
+async function processScreenshot(params, session, response) {
+  const page = getPage(params, session);
+  const screenshot = await page.screenshot({ encoding: 'base64' });
+  response.screenshot = screenshot;
+  response.message = 'done';
+  return response;
+}
