@@ -145,6 +145,11 @@ wsServer.on('request', async function (request) {
 
   console.log((new Date()) + ' Connection accepted.');
 
+  connection.on('close', function () {
+    console.log((new Date()) + ' Peer ' + connection.remoteAddress + ' disconnected.');
+    session.browser.close();
+  });
+
   // https://w3c.github.io/webdriver-bidi/#handle-an-incoming-message
   connection.on('message', async function (message) {
     console.log('message: ', message);
