@@ -201,6 +201,8 @@ async function processCommand(commandData, session) {
   response.id = commandData.id;
 
   switch (commandData.method) {
+    case "session.status":
+      return await processSessionStatus(commandData.params, session, response);
     case "newPage":
       return await processNewPage(commandData.params, session, response);
     case "goto":
@@ -241,5 +243,20 @@ async function processScreenshot(params, session, response) {
   const screenshot = await page.screenshot({ encoding: 'base64' });
   response.screenshot = screenshot;
   response.message = 'done';
+  return response;
+}
+
+async function processSessionStatus(params, session, response) {
+  if (session.browser.isConnected()) {
+    response.value = {
+      ready: true,
+      message: "ready"
+    }
+  } else {
+    response.value = {
+      ready: false,
+      message: "disconnected"
+    }
+  }
   return response;
 }
