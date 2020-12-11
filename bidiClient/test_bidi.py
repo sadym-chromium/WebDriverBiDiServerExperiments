@@ -15,16 +15,24 @@ async def websocket():
 # can't be decoded as known command.
 # https://w3c.github.io/webdriver-bidi/#handle-an-incoming-message
 
-@pytest.mark.skip(reason="requires a working command to test")
 @pytest.mark.asyncio
 async def test_binary(websocket):
-    # Send something which would be valid JSON and trigger
-    # an error if it were understood.
-    await websocket.send(b'{}')
-    # There should be no response at all to this binary message.
-    # Ensure this by sending another message
-    resp = await websocket.recv()
-    assert resp == None
+    # session.status is used in this test, but any simple command without side
+    # effects would work. It is first sent as text, which should work, and then
+    # sent again as binary, which should get an error response instead.
+    command = {"id": 1, "method": "session.status", "params": {}}
+
+    text_msg = json.dumps(command)
+    await websocket.send(text_msg)
+    resp = json.loads(await websocket.recv())
+    assert resp['id'] == 1
+
+    binary_msg = 'text_msg'.encode('utf-8')
+    await websocket.send(binary_msg)
+    resp = json.loads(await websocket.recv())
+    assert resp['id'] == None
+    assert resp['error'] == 'invalid argument'
+    assert isinstance(resp['message'], str)
 
 @pytest.mark.asyncio
 async def test_invalid_json(websocket):

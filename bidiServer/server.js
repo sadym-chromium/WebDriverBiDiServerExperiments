@@ -135,7 +135,7 @@ wsServer.on('request', async function (request) {
 
   try {
     // Launch browser for the newly created session.
-    session.browser = await puppeteer.launch({ headless: false });
+    session.browser = await puppeteer.launch({ headless: true });
     var connection = request.accept();
   } catch (e) {
     console.log("Connection rejected: ", e);
