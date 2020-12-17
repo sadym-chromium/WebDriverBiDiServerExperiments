@@ -97,7 +97,7 @@ function matchData(data) {
 function getErrorResponse(plainCommandData, errorCode, errorMessage) {
   // TODO: this is bizarre per spec. We reparse the payload and
   // extract the ID, regardless of what kind of value it was.
-  let commandId = null;
+  let commandId = undefined;
   try {
     const commandData = JSON.parse(plainCommandData);
     if (jsonType(commandData) === 'object' && 'id' in commandData) {
@@ -113,12 +113,16 @@ function getErrorResponse(plainCommandData, errorCode, errorMessage) {
   };
 }
 
+async function sendClientMessage(message, connection) {
+    const messageStr = JSON.stringify(message);
+    connection.sendUTF(messageStr);
+    console.log('Sent message: ' + messageStr);
+}
+
 // https://w3c.github.io/webdriver-bidi/#respond-with-an-error
 function respondWithError(connection, plainCommandData, errorCode, errorMessage) {
-  const response = JSON.stringify(getErrorResponse(plainCommandData, errorCode, errorMessage));
-  connection.sendUTF(response);
-
-  console.log('Sent error response:', response);
+  const errorResponse = getErrorResponse(plainCommandData, errorCode, errorMessage);
+  sendClientMessage(errorResponse, connection);
 }
 
 wsServer.on('request', async function (request) {
@@ -136,26 +140,28 @@ wsServer.on('request', async function (request) {
   try {
     // Launch browser for the newly created session.
     session.browser = await puppeteer.launch({ headless: true });
-    var connection = request.accept();
+    session.connection = request.accept();
   } catch (e) {
     console.log("Connection rejected: ", e);
     console.log((new Date()) + ' Connection from origin ' + request.origin + ' rejected.');
     return;
-   }
+  }
 
   console.log((new Date()) + ' Connection accepted.');
 
-  connection.on('close', function () {
-    console.log((new Date()) + ' Peer ' + connection.remoteAddress + ' disconnected.');
+  session.connection.on('close', function () {
+    console.log((new Date()) + ' Peer ' + session.connection.remoteAddress + ' disconnected.');
     session.browser.close();
   });
 
+  addConnectionEventHandlers(session.browser, session.connection);
+
   // https://w3c.github.io/webdriver-bidi/#handle-an-incoming-message
-  connection.on('message', async function (message) {
+  session.connection.on('message', function (message) {
     console.log('message: ', message);
     // 1. If |type| is not text, return.
-    if (message.type !== 'utf8' ) {
-      console.log(`Silently ignoring non-text (${message.type}) message`);
+    if (message.type !== 'utf8') {
+      respondWithError(session.connection, {}, "invalid argument", `not supported type (${message.type})`, `type (${message.type}) is not supported`);
       return;
     }
 
@@ -173,23 +179,15 @@ wsServer.on('request', async function (request) {
     try {
       commandData = matchData(plainCommandData);
     } catch (e) {
-      respondWithError(connection, plainCommandData, "invalid argument", e.message);
+      respondWithError(session.connection, plainCommandData, "invalid argument", e.message);
       return;
     }
 
-    try {
-      const response = await processCommand(commandData, session);
-      const responseStr = JSON.stringify(response);
-      connection.sendUTF(responseStr);
-      console.log('Sent response: ' + responseStr);
-      return;
-    } catch (e) {
-      respondWithError(connection, plainCommandData, "error processing command", e.message);
-      return;
-    }
-  });
-  connection.on('close', function (reasonCode, description) {
-    console.log((new Date()) + ' Peer ' + connection.remoteAddress + ' disconnected.');
+    processCommand(commandData, session).then(response => {
+      sendClientMessage(response, session.connection)
+    }).catch(() => {
+      respondWithError(session.connection, plainCommandData, "unknown error", e.message);
+    });
   });
 });
 
@@ -206,32 +204,33 @@ async function processCommand(commandData, session) {
   response.id = commandData.id;
 
   switch (commandData.method) {
-    case "session.status":
+    case "Session.status":
       return await processSessionStatus(commandData.params, session, response);
-    case "newPage":
-      return await processNewPage(commandData.params, session, response);
-    case "goto":
-      return await processGoto(commandData.params, session, response);
-    case "screenshot":
-      return await processScreenshot(commandData.params, session, response);
+    case "Browser.newPage":
+      return await processBrowserNewPage(commandData.params, session, response);
+    case "Page.navigate":
+      return await processPageNavigate(commandData.params, session, response);
+    case "Page.screenshot":
+      return await processPageScreenshot(commandData.params, session, response);
     default:
       throw new Error('unknown command');
   }
 }
 
-async function processNewPage(params, session, response) {
+async function processBrowserNewPage(params, session, response) {
   const page = await session.browser.newPage();
 
   const pageID = uuid();
   session.pages[pageID] = page;
 
-  response.pageID = pageID;
-  response.message = 'done';
+  response.value = { pageID };
+
+  addPageEventHandlers(pageID, page, session.connection);
 
   return response;
 }
 
-async function processGoto(params, session, response) {
+async function processPageNavigate(params, session, response) {
   const page = getPage(params, session);
 
   if (!params.url) {
@@ -239,15 +238,14 @@ async function processGoto(params, session, response) {
   }
 
   await page.goto(params.url);
-  response.message = 'done';
+  response.value = {};
   return response;
 }
 
-async function processScreenshot(params, session, response) {
+async function processPageScreenshot(params, session, response) {
   const page = getPage(params, session);
   const screenshot = await page.screenshot({ encoding: 'base64' });
-  response.screenshot = screenshot;
-  response.message = 'done';
+  response.value = { screenshot };
   return response;
 }
 
@@ -264,4 +262,25 @@ async function processSessionStatus(params, session, response) {
     }
   }
   return response;
+}
+
+// Events handlers
+
+function addConnectionEventHandlers(browser, connection) {
+  browser.on('disconnected', () => {
+    respondWithError(connection, {}, "unknown error", "browser closed");
+    connection.close();
+  });
+}
+
+function addPageEventHandlers(pageID, page, connection) {
+  // TODO: Add events filtering.
+  page.on('load', () => {
+    sendClientMessage({
+      method: 'Page.load',
+      params: {
+        pageID: pageID
+      }
+    }, connection);
+  });
 }
