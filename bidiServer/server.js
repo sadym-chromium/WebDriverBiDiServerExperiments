@@ -23,6 +23,7 @@ const uuid = require('uuid').v4;
 const http = require('http');
 
 const port = process.env.PORT || 8080;
+const headless = process.env.HEADLESS === 'false' ? false : true;
 
 const server = http.createServer(function (request, response) {
   console.log((new Date()) + ' Received request for ' + request.url);
@@ -139,8 +140,9 @@ wsServer.on('request', async function (request) {
 
   try {
     // Launch browser for the newly created session.
-    session.browser = await puppeteer.launch({ headless: true });
+    session.browser = await puppeteer.launch({ headless });
     session.connection = request.accept();
+    addBrowserEventHandlers(session.browser, session.connection);
   } catch (e) {
     console.log("Connection rejected: ", e);
     console.log((new Date()) + ' Connection from origin ' + request.origin + ' rejected.');
@@ -185,7 +187,7 @@ wsServer.on('request', async function (request) {
 
     processCommand(commandData, session).then(response => {
       sendClientMessage(response, session.connection)
-    }).catch(() => {
+    }).catch(e => {
       respondWithError(session.connection, plainCommandData, "unknown error", e.message);
     });
   });
@@ -204,33 +206,54 @@ async function processCommand(commandData, session) {
   response.id = commandData.id;
 
   switch (commandData.method) {
-    case "Session.status":
+    // Commands specified in https://w3c.github.io/webdriver-bidi.
+    case "session.status":
       return await processSessionStatus(commandData.params, session, response);
-    case "Browser.newPage":
-      return await processBrowserNewPage(commandData.params, session, response);
-    case "Page.navigate":
-      return await processPageNavigate(commandData.params, session, response);
-    case "Page.screenshot":
-      return await processPageScreenshot(commandData.params, session, response);
+    case "browsingContext.getTree":
+      return await processBrowsingContextGetTree(commandData.params, session, response);
+
+    // Debug commands not specified in https://w3c.github.io/webdriver-bidi.
+    case "DEBUG.Browser.newPage":
+      return await processDebugBrowserNewPage(commandData.params, session, response);
+    case "DEBUG.Page.close":
+      return await processDebugPageClose(commandData.params, session, response);
+    case "DEBUG.Page.navigate":
+      return await processDebugPageNavigate(commandData.params, session, response);
+    case "DEBUG.Page.screenshot":
+      return await processDebugPageScreenshot(commandData.params, session, response);
     default:
       throw new Error('unknown command');
   }
 }
 
-async function processBrowserNewPage(params, session, response) {
+async function processDebugBrowserNewPage(params, session, response) {
   const page = await session.browser.newPage();
 
-  const pageID = uuid();
+  // Use CDP targetID for mapping.
+  const pageID = page.target()._targetId;
   session.pages[pageID] = page;
 
-  response.value = { pageID };
+  response.result = { pageID };
 
   addPageEventHandlers(pageID, page, session.connection);
 
   return response;
 }
 
-async function processPageNavigate(params, session, response) {
+async function processDebugPageClose(params, session, response) {
+  const page = getPage(params, session);
+  const pageID = page.target()._targetId;
+
+  page.close();
+  // Remove page from session map.
+  session.pages[pageID] = undefined;
+
+  response.result = {};
+
+  return response;
+}
+
+async function processDebugPageNavigate(params, session, response) {
   const page = getPage(params, session);
 
   if (!params.url) {
@@ -238,25 +261,52 @@ async function processPageNavigate(params, session, response) {
   }
 
   await page.goto(params.url);
-  response.value = {};
+  response.result = {};
   return response;
 }
 
-async function processPageScreenshot(params, session, response) {
+async function processDebugPageScreenshot(params, session, response) {
   const page = getPage(params, session);
   const screenshot = await page.screenshot({ encoding: 'base64' });
-  response.value = { screenshot };
+  response.result = { screenshot };
+  return response;
+}
+
+async function processBrowsingContextGetTree(params, session, response) {
+  // BiDi `context` corresponds to puppeteer `target`
+
+  const targets = session.browser.targets().filter(t => {
+    // `browser` and `iframe` are not supported as targets yet.
+    return t._targetInfo.type !== 'browser'
+      && t._targetInfo.type !== 'iframe';
+  });
+
+  await Promise.all(targets.map(t => {
+    if (!session.pages[t._targetId]) {
+      return t.page().then(p => {
+        // For now pages need to be stored in the map.
+        // Can be replaced with getting page object by ID on demand.
+        session.pages[t._targetId] = p;
+      });
+    }
+  }));
+
+  const contexts = targets
+    .map(t => getBrowsingContextInfo(t));
+
+  response.result = { contexts };
+
   return response;
 }
 
 async function processSessionStatus(params, session, response) {
   if (session.browser.isConnected()) {
-    response.value = {
+    response.result = {
       ready: true,
       message: "ready"
     }
   } else {
-    response.value = {
+    response.result = {
       ready: false,
       message: "disconnected"
     }
@@ -265,6 +315,7 @@ async function processSessionStatus(params, session, response) {
 }
 
 // Events handlers
+// TODO: Add events filtering.
 
 function addConnectionEventHandlers(browser, connection) {
   browser.on('disconnected', () => {
@@ -274,13 +325,46 @@ function addConnectionEventHandlers(browser, connection) {
 }
 
 function addPageEventHandlers(pageID, page, connection) {
-  // TODO: Add events filtering.
+  // Events specified in https://w3c.github.io/webdriver-bidi should be here.
+
+  // Debug events not specified in https://w3c.github.io/webdriver-bidi.
   page.on('load', () => {
     sendClientMessage({
-      method: 'Page.load',
+      method: 'DEBUG.Page.load',
       params: {
         pageID: pageID
       }
     }, connection);
   });
+}
+
+function addBrowserEventHandlers(browser, connection) {
+  // Events specified in https://w3c.github.io/webdriver-bidi.
+  browser.on('targetcreated', (t) => {
+    sendClientMessage({
+      method: 'browsingContext.contextCreated',
+      params: getBrowsingContextInfo(t)
+    }, connection);
+  });
+
+  browser.on('targetdestroyed', (t) => {
+    sendClientMessage({
+      method: 'browsingContext.contextDestroyed',
+      params: getBrowsingContextInfo(t)
+    }, connection);
+  });
+
+  // Debug events not specified in https://w3c.github.io/webdriver-bidi
+  // should be here.
+}
+
+// Data contracts
+function getBrowsingContextInfo(target) {
+  return {
+    context: target._targetId,
+    parent: target.opener() ? target.opener().id() : null,
+    url: target.url(),
+    // TODO: `type` is a debug property, remove when not needed.
+    type: target._targetInfo.type
+  }
 }
