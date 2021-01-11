@@ -11,6 +11,18 @@ async def websocket():
     async with websockets.connect(url) as connection:
         yield connection
 
+# Returns the only open contextID. Throws exception if it is not unique.
+async def get_open_context_id(websocket):
+    # Send "browsingContext.getTree" command.
+    command = {"id": 9999, "method": "browsingContext.getTree", "params": {}}
+    await websocket.send(json.dumps(command))
+    # Get open context ID.
+    resp = json.loads(await websocket.recv())
+    assert resp['id'] == 9999
+    [context] = resp['result']['contexts']
+    contextID = context['context']
+    return contextID
+
 # Tests for "handle an incoming message" error handling, when the message
 # can't be decoded as known command.
 # https://w3c.github.io/webdriver-bidi/#handle-an-incoming-message
@@ -30,118 +42,173 @@ async def test_binary(websocket):
     binary_msg = 'text_msg'.encode('utf-8')
     await websocket.send(binary_msg)
     resp = json.loads(await websocket.recv())
-    assert resp['error'] == 'invalid argument'
-    assert resp['message'] == 'not supported type (binary)'
-    assert isinstance(resp['message'], str)
+    assert resp == {
+        "error": "invalid argument",
+        "message": "not supported type (binary)"}
 
 @pytest.mark.asyncio
 async def test_invalid_json(websocket):
     message = 'this is not json'
     await websocket.send(message)
     resp = json.loads(await websocket.recv())
-    assert resp['error'] == 'invalid argument'
-    assert isinstance(resp['message'], str)
+    assert resp == {
+        "error": "invalid argument",
+        "message": "Cannot parse data as JSON"}
 
 @pytest.mark.asyncio
 async def test_empty_object(websocket):
     command = {}
     await websocket.send(json.dumps(command))
     resp = json.loads(await websocket.recv())
-    assert resp['error'] == 'invalid argument'
-    assert isinstance(resp['message'], str)
+    assert resp == {
+        "error": "invalid argument",
+        "message": "Expected unsigned integer but got undefined"}
 
 @pytest.mark.asyncio
 async def test_session_status(websocket):
     command = {"id": 5, "method": "session.status", "params": {}}
     await websocket.send(json.dumps(command))
     resp = json.loads(await websocket.recv())
-    assert resp['id'] == 5
-    assert resp['result']['ready'] == True
-    assert resp['result']['message'] == 'ready'
+    assert resp == {"id": 5, "result": {"ready": True, "message": "ready"}}
 
 @pytest.mark.asyncio
-async def test_newPage_browsingContextContextCreatedRaised_pageNavigate_pageLoadRaised(websocket):
-    # Send "DEBUG.Browser.newPage" command.
-    command = {"id": 6, "method": "DEBUG.Browser.newPage", "params": {}}
-    await websocket.send(json.dumps(command))
-
-    # Receive "browsingContext.contextCreated" event raised.
-    resp = json.loads(await websocket.recv())
-    assert resp['method'] == 'browsingContext.contextCreated'
-
-    # Assert "DEBUG.Browser.newPage" command done.
-    resp = json.loads(await websocket.recv())
-    assert resp['id'] == 6
-    pageID = resp['result']['pageID']
-
-    # Send "DEBUG.Page.navigate" command.
-    command = {"id": 7, "method": "DEBUG.Page.navigate", "params": {"url": "http://example.com", "pageID": pageID}}
-    await websocket.send(json.dumps(command))
-
-    # Assert "DEBUG.Page.load" event raised.
-    resp = json.loads(await websocket.recv())
-    assert resp['method'] == 'DEBUG.Page.load'
-    assert resp['params']['pageID'] == pageID
-
-    # Assert "DEBUG.Page.navigate" command done.
-    resp = json.loads(await websocket.recv())
-    assert resp['id'] == 7
-
-@pytest.mark.asyncio
-async def test_getTree_pageNavigated(websocket):
+async def test_getTree_contextReturned(websocket):
     command = {"id": 8, "method": "browsingContext.getTree", "params": {}}
     await websocket.send(json.dumps(command))
+
+    # Assert "browsingContext.getTree" command done.
     resp = json.loads(await websocket.recv())
-    assert resp['id'] == 8
-    assert len(resp['result']['contexts']) == 1
-    context = resp['result']['contexts'][0]
+    [context] = resp['result']['contexts']
     contextID = context['context']
-
-    # Send "DEBUG.Page.navigate" command.
-    command = {"id": 9, "method": "DEBUG.Page.navigate", "params": {"url": "http://example.com", "pageID": contextID}}
-    await websocket.send(json.dumps(command))
-
-    # Assert "DEBUG.Page.navigate" command done.
-    resp = json.loads(await websocket.recv())
-    assert resp['id'] == 9
-    assert resp['result'] == {}
-
-@pytest.mark.asyncio
-async def test_newPage_browsingContextContextCreatedRaised(websocket):
-    # Send "DEBUG.Browser.newPage" command.
-    command = {"id": 10, "method": "DEBUG.Browser.newPage", "params": {}}
-    await websocket.send(json.dumps(command))
-
-    # Assert "browsingContext.contextCreated" event raised.
-    resp = json.loads(await websocket.recv())
-    assert resp['method'] == 'browsingContext.contextCreated'
-    pageID = resp['params']['context']
-
-    # Assert "DEBUG.Browser.newPage" command done.
-    resp = json.loads(await websocket.recv())
-    assert resp['id'] == 10
-    assert resp['result']['pageID'] == pageID
+    assert isinstance(contextID, str)
+    assert len(contextID) > 1
+    assert resp == {
+        "id": 8,
+        "result": {
+            "contexts": [{
+                    "context": contextID,
+                    "parent": None,
+                    "url": "about:blank",
+                    "DEBUG.type": "page"}]}}
 
 @pytest.mark.asyncio
-async def test_PageClose_browsingContextContextDestroyedRaised(websocket):
-    # Get open context ID.
-    command = {"id": 11, "method": "browsingContext.getTree", "params": {}}
+async def test_createContext_eventContextCreatedEmittedAndContextCreated(websocket):
+    # Send "PROTO.browsingContext.createContext" command.
+    command = {
+        "id": 9, "method": "PROTO.browsingContext.createContext",
+        "params": {"url": "http://example.com/"}}
     await websocket.send(json.dumps(command))
+
+    # Assert "browsingContext.contextCreated" event emitted.
     resp = json.loads(await websocket.recv())
-    assert resp['id'] == 11
-    contextID = resp['result']['contexts'][0]['context']
+    contextID = resp['params']['context']
+    assert resp == {
+        "method": "browsingContext.contextCreated",
+        "params": {
+            "context":contextID,
+            "parent": None,
+            "url":"http://example.com/",
+            "DEBUG.type":"page"}}
+
+    # Assert "PROTO.browsingContext.createContext" command done.
+    resp = json.loads(await websocket.recv())
+    assert resp == {
+        "id": 9,
+        "result": {
+            "context": contextID,
+            "parent": None,
+            "url": "http://example.com/",
+            "DEBUG.type": "page"}}
+
+@pytest.mark.asyncio
+async def test_PageClose_browsingContextContextDestroyedEmitted(websocket):
+    contextID = await get_open_context_id(websocket)
 
     # Send "DEBUG.Page.close" command.
-    command = {"id": 12, "method": "DEBUG.Page.close", "params": {"pageID": contextID}}
+    command = {"id": 12, "method": "DEBUG.Page.close", "params": {"context": contextID}}
     await websocket.send(json.dumps(command))
 
     # Assert "DEBUG.Page.close" command done.
     resp = json.loads(await websocket.recv())
-    assert resp['id'] == 12
+    assert resp == {"id": 12, "result": {}}
 
-    # Assert "browsingContext.contextCreated" event raised.
+    # Assert "browsingContext.contextCreated" event emitted.
     resp = json.loads(await websocket.recv())
-    assert resp['method'] == 'browsingContext.contextDestroyed'
-    assert resp['params']['context'] == contextID
-    assert resp['params']['parent'] == None
-    assert resp['params']['url'] == "about:blank"
+    assert resp == {
+        "method": "browsingContext.contextDestroyed",
+        "params": {
+            "context": contextID,
+            "parent": None,
+            "url": "about:blank",
+            "DEBUG.type": "other"}}
+
+@pytest.mark.asyncio
+async def test_RunJs_jsEvaluated(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send "DEBUG.Page.navigate" command.
+    command = {
+        "id": 14,
+        "method": "DEBUG.Page.runJS",
+        "params": {
+            "jsFunction": "'!!@@##, ' + window.location.href",
+            "context": contextID}}
+    await websocket.send(json.dumps(command))
+
+    # Assert "DEBUG.Page.navigate" command done.
+    resp = json.loads(await websocket.recv())
+    assert resp == {"id": 14, "result": "\"!!@@##, about:blank\""}
+
+@pytest.mark.asyncio
+async def test_navigate_eventPageLoadEmittedAndNavigated(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send "PROTO.browsingContext.navigate" command.
+    command = {
+        "id": 15,
+        "method": "PROTO.browsingContext.navigate",
+        "params": {
+            "url": "http://example.com",
+            "waitUntil": ["load", "domcontentloaded", "networkidle0", "networkidle2"],
+            "context": contextID}}
+    await websocket.send(json.dumps(command))
+
+    # Assert "DEBUG.Page.load" event emitted.
+    resp = json.loads(await websocket.recv())
+    assert resp == {
+        "method": "DEBUG.Page.load",
+        "params": {
+            "context": contextID}}
+
+    # Assert "DEBUG.Page.navigate" command done.
+    resp = json.loads(await websocket.recv())
+    assert resp == {"id": 15, "result": {}}
+
+@pytest.mark.asyncio
+async def test_navigateWithShortTimeout_timeoutOccuredAndEventPageLoadEmitted(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send "PROTO.browsingContext.navigate" command.
+    command = {
+        "id": 16,
+        "method": "PROTO.browsingContext.navigate",
+        "params": {
+            "url": "http://example.com",
+            "context": contextID,
+            "waitUntil": ["load", "domcontentloaded", "networkidle0", "networkidle2"],
+            "timeout":"1"}}
+
+    await websocket.send(json.dumps(command))
+
+    # Assert "DEBUG.Page.navigate" command done.
+    resp = json.loads(await websocket.recv())
+    assert resp == {
+        "id":16,
+        "error": "unknown error",
+        "message": "Navigation timeout of 1 ms exceeded"}
+
+    resp = json.loads(await websocket.recv())
+    assert resp == {
+        "method": "DEBUG.Page.load",
+        "params": {
+            "context": contextID}}

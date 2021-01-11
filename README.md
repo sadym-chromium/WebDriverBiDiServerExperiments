@@ -2,6 +2,11 @@
 
 This is an experimental prototype of the [WebDriver BiDi](https://w3c.github.io/webdriver-bidi/) protocol for Chromium, implemented as a JavaScript layer translating between BiDi and CDP. It is based on (forked from) [Puppeteer](https://github.com/puppeteer/puppeteer) for use of its CDP abstractions, but isn't intended for use as a JavaScript client library.
 
+## Building the Puppeteer
+In case of some Puppeteer code is changed, it needs to be rebuild:
+
+    npm run tsc
+
 ## Starting the Server
 
     npm install

@@ -353,17 +353,17 @@ export class Browser extends EventEmitter {
   /**
    * Creates a {@link Page} in the default browser context.
    */
-  async newPage(): Promise<Page> {
-    return this._defaultContext.newPage();
+  async newPage(url?: string): Promise<Page> {
+    return this._defaultContext.newPage(url);
   }
 
   /**
    * @internal
    * Used by BrowserContext directly so cannot be marked private.
    */
-  async _createPageInContext(contextId?: string): Promise<Page> {
+  async _createPageInContext(contextId?: string, url?: string): Promise<Page> {
     const { targetId } = await this._connection.send('Target.createTarget', {
-      url: 'about:blank',
+      url: url || 'about:blank',
       browserContextId: contextId || undefined,
     });
     const target = await this._targets.get(targetId);
@@ -709,8 +709,8 @@ export class BrowserContext extends EventEmitter {
   /**
    * Creates a new page in the browser context.
    */
-  newPage(): Promise<Page> {
-    return this._browser._createPageInContext(this._id);
+  newPage(url?: string): Promise<Page> {
+    return this._browser._createPageInContext(this._id, url);
   }
 
   /**
