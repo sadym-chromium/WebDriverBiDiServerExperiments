@@ -20,6 +20,10 @@ const puppeteer = require('..');
 const WebSocketServer = require('websocket').server;
 
 const http = require('http');
+const debug = require('debug');
+
+const debugBiDiSend = debug('BiDi:SEND ►');
+const debugBiDiReceive = debug('BiDi:RECV ◀');
 
 const port = process.env.PORT || 8080;
 const headless = process.env.HEADLESS !== 'false';
@@ -116,9 +120,9 @@ function getErrorResponse(plainCommandData, errorCode, errorMessage) {
 }
 
 async function sendClientMessage(message, connection) {
-    const messageStr = JSON.stringify(message);
-    connection.sendUTF(messageStr);
-    console.log('Sent message: ' + messageStr);
+  const messageStr = JSON.stringify(message);
+  debugBiDiSend(messageStr);
+  connection.sendUTF(messageStr);
 }
 
 // https://w3c.github.io/webdriver-bidi/#respond-with-an-error
@@ -160,7 +164,6 @@ wsServer.on('request', async function (request) {
 
   // https://w3c.github.io/webdriver-bidi/#handle-an-incoming-message
   session.connection.on('message', function (message) {
-    console.log('message: ', message);
     // 1. If |type| is not text, return.
     if (message.type !== 'utf8') {
       respondWithError(session.connection, {}, "invalid argument", `not supported type (${message.type})`, `type (${message.type}) is not supported`);
@@ -168,13 +171,12 @@ wsServer.on('request', async function (request) {
     }
 
     const plainCommandData = message.utf8Data;
+    debugBiDiReceive(plainCommandData);
 
     // 2. Assert: |data| is a scalar value string, because the WebSocket
     //    handling errors in UTF-8-encoded data would already have
     //    failed the WebSocket connection otherwise.
     // TODO: Is this already handled correctly by the websocket library?
-
-    console.log('Received Message: ' + plainCommandData);
 
     // 3. Match |data| against the remote end definition.
     let commandData;
