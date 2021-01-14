@@ -133,7 +133,7 @@ function respondWithError(connection, plainCommandData, errorCode, errorMessage)
 
 wsServer.on('request', async function (request) {
   // A session per connection.
-  const session = { pages: {} };
+  const session = { pages: {}, elements: {} };
 
   if (!originIsAllowed(request.origin)) {
     // Make sure we only accept requests from an allowed origin
@@ -205,6 +205,21 @@ function getPage(commandData, session) {
   return session.pages[pageID];
 }
 
+function getElement(commandData, session) {
+  // Puppeteer `element` corresponds to BiDi `object`
+  const elementID = commandData.objectId;
+
+  if (!(elementID in session.elements)) {
+    throw new Error('context not found');
+  }
+
+  return session.elements[elementID];
+}
+
+function getElementID(element) {
+  return element._remoteObject.objectId;
+}
+
 async function processCommand(commandData, session) {
   const response = {};
   response.id = commandData.id;
@@ -221,6 +236,12 @@ async function processCommand(commandData, session) {
       return await process_PROTO_browsingContext_createContext(commandData.params, session, response);
     case "PROTO.browsingContext.navigate":
       return await process_PROTO_browsingContext_navigate(commandData.params, session, response);
+    case "PROTO.browsingContext.selectElement":
+      return await process_PROTO_browsingContext_selectElement(commandData.params, session, response);
+    case "PROTO.browsingContext.waitForSelector":
+      return await process_PROTO_browsingContext_waitForSelector(commandData.params, session, response);
+    case "PROTO.browsingContext.click":
+      return await process_PROTO_browsingContext_click(commandData.params, session, response);
 
     // Debug commands not specified in https://w3c.github.io/webdriver-bidi.
     case "DEBUG.Page.close":
@@ -301,6 +322,64 @@ async function process_DEBUG_Page_runJS(params, session, response) {
 
   // TODO: implement according to https://w3c.github.io/webdriver-bidi/#data-types-remote-value
   response.result = JSON.stringify(result);
+  return response;
+}
+
+async function process_PROTO_browsingContext_waitForSelector(params, session, response) {
+  const page = getPage(params, session);
+
+  if (!params.selector)
+    throw new Error('missing params.selector');
+
+  const options = {};
+  if ('visible' in params)
+    options.visible = params.visible;
+  if ('hidden' in params)
+    options.hidden = params.hidden;
+  if ('timeout' in params)
+    options.timeout = params.timeout;
+
+  const element = await page.waitForSelector(params.selector, options);
+
+  if (element) {
+    // Store element in the local cache.
+    session.elements[getElementID(element)] = element;
+    response.result = getElementValue(element);
+  } else {
+    response.result = {};
+  }
+
+  return response;
+}
+
+async function process_PROTO_browsingContext_selectElement(params, session, response) {
+  const page = getPage(params, session);
+
+  if (!params.selector)
+    throw new Error('missing params.selector');
+
+  const element = await page.$(params.selector);
+
+  if (element) {
+    // Store element in the local cache.
+    session.elements[getElementID(element)] = element;
+    response.result = getElementValue(element);
+  } else {
+    response.result = {};
+  }
+
+  return response;
+}
+
+async function process_PROTO_browsingContext_click(params, session, response) {
+  const page = getPage(params, session);
+  // TODO: make element optionals.
+  // TODO: add click options.
+  const element = getElement(params, session);
+
+  await element.click();
+  response.result = {};
+
   return response;
 }
 
@@ -407,4 +486,12 @@ function getBrowsingContextInfo(target) {
     // Debug properties not specified in https://w3c.github.io/webdriver-bidi.
     'DEBUG.type': target._targetInfo.type
   }
+}
+
+function getElementValue(element) {
+  return {
+    // Properties specified in https://w3c.github.io/webdriver-bidi.
+    type: "node",
+    objectId: getElementID(element)
+  };
 }
