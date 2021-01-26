@@ -22,6 +22,7 @@ const WebSocketServer = require('websocket').server;
 const http = require('http');
 const debug = require('debug');
 
+const debugBrowserConsole = debug('Remote:console ◀');
 const debugBiDiSend = debug('BiDi:SEND ►');
 const debugBiDiReceive = debug('BiDi:RECV ◀');
 
@@ -242,14 +243,16 @@ async function processCommand(commandData, session) {
       return await process_PROTO_browsingContext_waitForSelector(commandData.params, session, response);
     case "PROTO.browsingContext.click":
       return await process_PROTO_browsingContext_click(commandData.params, session, response);
+    case "PROTO.browsingContext.type":
+      return await process_PROTO_browsingContext_type(commandData.params, session, response);
+    case "PROTO.page.evaluate":
+      return await process_PROTO_page_evaluate(commandData.params, session, response);
 
     // Debug commands not specified in https://w3c.github.io/webdriver-bidi.
     case "DEBUG.Page.close":
       return await process_DEBUG_Page_close(commandData.params, session, response);
     case "DEBUG.Page.screenshot":
       return await process_DEBUG_Page_screenshot(commandData.params, session, response);
-    case "DEBUG.Page.runJS":
-      return await process_DEBUG_Page_runJS(commandData.params, session, response);
     default:
       throw new Error('unknown command');
   }
@@ -314,17 +317,6 @@ async function process_DEBUG_Page_screenshot(params, session, response) {
   return response;
 }
 
-async function process_DEBUG_Page_runJS(params, session, response) {
-  const page = getPage(params, session);
-
-  // TODO: implement according to https://github.com/w3c/webdriver-bidi/issues/18
-  const result = await page.evaluate(params.jsFunction);
-
-  // TODO: implement according to https://w3c.github.io/webdriver-bidi/#data-types-remote-value
-  response.result = JSON.stringify(result);
-  return response;
-}
-
 async function process_PROTO_browsingContext_waitForSelector(params, session, response) {
   const page = getPage(params, session);
 
@@ -379,6 +371,51 @@ async function process_PROTO_browsingContext_click(params, session, response) {
 
   await element.click();
   response.result = {};
+
+  return response;
+}
+
+async function process_PROTO_browsingContext_type(params, session, response) {
+  const page = getPage(params, session);
+  // TODO: make element optionals.
+  // TODO: add type options.
+  const element = getElement(params, session);
+
+  if (!params.text)
+    throw new Error('missing params.text');
+
+  const options = params.options ? params.options : {};
+
+  await element.type(params.text, options);
+
+  response.result = {};
+
+  return response;
+}
+
+async function process_PROTO_page_evaluate(params, session, response) {
+  const page = getPage(params, session);
+
+  if (!params.function)
+    throw new Error('missing params.function');
+
+  const args = [params.function];
+  if (params.args) {
+    for (const arg of params.args) {
+      if (arg.objectId) {
+        args.push(getElement(arg, session));
+      } else {
+        // TODO: Implement proper scalar deserialisation according to
+        // https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
+        args.push(arg);
+      }
+    }
+  }
+  const result = await page.evaluate.apply(page, args);
+
+  // TODO: Implement proper scalar serialisation according to
+  // https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
+  response.result = JSON.stringify(result);
 
   return response;
 }
@@ -448,6 +485,21 @@ function addPageEventHandlers(pageID, page, connection) {
       }
     }, connection);
   });
+
+  page.on('console', msg => {
+    for (let i = 0; i < msg.args().length; ++i)
+      debugBrowserConsole(`${i}: ${msg.args()[i]}`);
+
+    sendClientMessage({
+      method: 'PROTO.browsingContext.consoleMessage',
+      params: {
+        // Pupputeer `pageID` corresponds to BiDi `context`
+        context: pageID,
+        value: msg.text()
+      }
+    }, connection);
+
+  });
 }
 
 function addBrowserEventHandlers(browser, connection) {
@@ -484,7 +536,7 @@ function getBrowsingContextInfo(target) {
     // TODO add `children` field.
 
     // Debug properties not specified in https://w3c.github.io/webdriver-bidi.
-    'DEBUG.type': target._targetInfo.type
+    // 'DEBUG.type': target._targetInfo.type
   }
 }
 

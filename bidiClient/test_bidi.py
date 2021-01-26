@@ -115,12 +115,11 @@ async def test_getTree_contextReturned(websocket):
             "contexts": [{
                     "context": contextID,
                     "parent": None,
-                    "url": "about:blank",
-                    "DEBUG.type": "page"}]}}
+                    "url": "about:blank"}]}}
 
 @pytest.mark.asyncio
 async def test_createContext_eventContextCreatedEmittedAndContextCreated(websocket):
-    # Send "PROTO.browsingContext.createContext" command.
+    # Send command.
     command = {
         "id": 9,
         "method": "PROTO.browsingContext.createContext",
@@ -136,28 +135,26 @@ async def test_createContext_eventContextCreatedEmittedAndContextCreated(websock
         "params": {
             "context":contextID,
             "parent": None,
-            "url": "data:text/html,<h2>test</h2>",
-            "DEBUG.type":"page"}}
+            "url": "data:text/html,<h2>test</h2>"}}
 
-    # Assert "PROTO.browsingContext.createContext" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     assert resp == {
         "id": 9,
         "result": {
             "context": contextID,
             "parent": None,
-            "url": "data:text/html,<h2>test</h2>",
-            "DEBUG.type": "page"}}
+            "url": "data:text/html,<h2>test</h2>"}}
 
 @pytest.mark.asyncio
 async def test_PageClose_browsingContextContextDestroyedEmitted(websocket):
     contextID = await get_open_context_id(websocket)
 
-    # Send "DEBUG.Page.close" command.
+    # Send command.
     command = {"id": 12, "method": "DEBUG.Page.close", "params": {"context": contextID}}
     await send_JSON_command(websocket, command)
 
-    # Assert "DEBUG.Page.close" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     assert resp == {"id": 12, "result": {}}
 
@@ -168,31 +165,13 @@ async def test_PageClose_browsingContextContextDestroyedEmitted(websocket):
         "params": {
             "context": contextID,
             "parent": None,
-            "url": "about:blank",
-            "DEBUG.type": "other"}}
-
-@pytest.mark.asyncio
-async def test_RunJs_jsEvaluated(websocket):
-    contextID = await get_open_context_id(websocket)
-
-    # Send "DEBUG.Page.runJS" command.
-    command = {
-        "id": 14,
-        "method": "DEBUG.Page.runJS",
-        "params": {
-            "jsFunction": "'!!@@##, ' + window.location.href",
-            "context": contextID}}
-    await send_JSON_command(websocket, command)
-
-    # Assert "DEBUG.Page.runJS" command done.
-    resp = await read_JSON_message(websocket)
-    assert resp == {"id": 14, "result": "\"!!@@##, about:blank\""}
+            "url": "about:blank"}}
 
 @pytest.mark.asyncio
 async def test_navigate_eventPageLoadEmittedAndNavigated(websocket):
     contextID = await get_open_context_id(websocket)
 
-    # Send "PROTO.browsingContext.navigate" command.
+    # Send command.
     command = {
         "id": 15,
         "method": "PROTO.browsingContext.navigate",
@@ -209,7 +188,7 @@ async def test_navigate_eventPageLoadEmittedAndNavigated(websocket):
         "params": {
             "context": contextID}}
 
-    # Assert "PROTO.browsingContext.navigate" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     assert resp == {"id": 15, "result": {}}
 
@@ -217,7 +196,7 @@ async def test_navigate_eventPageLoadEmittedAndNavigated(websocket):
 async def test_navigateWithShortTimeout_timeoutOccuredAndEventPageLoadEmitted(websocket):
     contextID = await get_open_context_id(websocket)
 
-    # Send "PROTO.browsingContext.navigate" command.
+    # Send command.
     command = {
         "id": 16,
         "method": "PROTO.browsingContext.navigate",
@@ -229,10 +208,10 @@ async def test_navigateWithShortTimeout_timeoutOccuredAndEventPageLoadEmitted(we
 
     await send_JSON_command(websocket, command)
 
-    # Assert "PROTO.browsingContext.navigate" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     assert resp == {
-        "id":16,
+        "id": 16,
         "error": "unknown error",
         "message": "Navigation timeout of 1 ms exceeded"}
 
@@ -248,7 +227,7 @@ async def test_waitForSelector_success(websocket):
     await goto_url(websocket, contextID,
         "data:text/html,<h2>test</h2>")
 
-    # Send "PROTO.browsingContext.waitForSelector" command.
+    # Send command.
     await send_JSON_command(websocket, {
         "id": 17,
         "method": "PROTO.browsingContext.waitForSelector",
@@ -256,7 +235,7 @@ async def test_waitForSelector_success(websocket):
             "selector": "body > h2",
             "context": contextID}})
 
-    # Assert "PROTO.browsingContext.waitForSelector" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     objectID = resp["result"]["objectId"]
     assert resp == {
@@ -289,15 +268,14 @@ async def test_waitForSelector_success_slow(websocket):
     assert resp == {"id":18,"error":"unknown error","message":"waiting for selector `body > h2` failed: timeout 1000ms exceeded"}
 
 # 3. Add element to the page.
-    command = {
+    await send_JSON_command(websocket, {
         "id": 19,
-        "method": "DEBUG.Page.runJS",
+        "method": "PROTO.page.evaluate",
         "params": {
-            "jsFunction": "document.documentElement.innerHTML='<h2 />'",
-            "context": contextID}}
-    await send_JSON_command(websocket, command)
+            "function": "document.documentElement.innerHTML='<h2 />'",
+            "context": contextID}})
 
-    # Assert "DEBUG.Page.runJS" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     assert resp == {"id":19,"result":"\"<h2 />\""}
 
@@ -325,7 +303,7 @@ async def test_waitForHiddenSelector_success(websocket):
     await goto_url(websocket, contextID,
         "data:text/html,<h2>test</h2>")
 
-    # Send "PROTO.browsingContext.waitForSelector" command.
+    # Send command.
     await send_JSON_command(websocket, {
         "id": 21,
         "method": "PROTO.browsingContext.waitForSelector",
@@ -334,7 +312,7 @@ async def test_waitForHiddenSelector_success(websocket):
             "context": contextID,
             "hidden": True}})
 
-    # Assert "PROTO.browsingContext.waitForSelector" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     assert resp == {"id": 21, "result": {}}
 
@@ -344,7 +322,7 @@ async def test_waitForSelectorWithMinimumTimeout_failedWithTimeout(websocket):
     await goto_url(websocket, contextID,
         "data:text/html,<h2>test</h2>")
 
-    # Send "PROTO.browsingContext.waitForSelector" command.
+    # Send command.
     await send_JSON_command(websocket, {
         "id": 22,
         "method": "PROTO.browsingContext.waitForSelector",
@@ -353,7 +331,7 @@ async def test_waitForSelectorWithMinimumTimeout_failedWithTimeout(websocket):
             "timeout": 1,
             "context": contextID}})
 
-    # Assert "PROTO.browsingContext.waitForSelector" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     assert resp == {
         "id": 22,
@@ -366,7 +344,7 @@ async def test_waitForSelectorWithMissingElement_failedWithTimeout_slow(websocke
     await goto_url(websocket, contextID,
         "data:text/html,<h2>test</h2>")
 
-    # Send "PROTO.browsingContext.waitForSelector" command.
+    # Send command.
     await send_JSON_command(websocket, {
         "id": 23,
         "method": "PROTO.browsingContext.waitForSelector",
@@ -375,7 +353,7 @@ async def test_waitForSelectorWithMissingElement_failedWithTimeout_slow(websocke
             "timeout": 1000,
             "context": contextID}})
 
-    # Assert "PROTO.browsingContext.waitForSelector" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     assert resp == {
         "id": 23,
@@ -384,32 +362,20 @@ async def test_waitForSelectorWithMissingElement_failedWithTimeout_slow(websocke
 
 @pytest.mark.asyncio
 async def test_clickElement_clickProcessed(websocket):
-# 1. Open page with button and click handler. Button click replaces button with `<h1 />`.
-# 2. Assert `<h1 />` is not visible.
-# 3. Get the button.
-# 4. Click the button.
-# TODO: assert the `PROTO.browsingContext.click` waited for the click happened.
-# 5. Assert `<h1 />` is visible.
+# 1. Open page with button and click handler. Button click logs message.
+# 2. Get the button.
+# 3. Click the button.
+# 4. Assert console log event raised.
+# 5. Assert click command done.
 
     contextID = await get_open_context_id(websocket)
 
-# 1. Open page with button and click handler. Button click replaces button with `<h1 />`.
+# 1. Open page with button and click handler. Button click logs message.
     await goto_url(websocket, contextID,
-        "data:text/html,<button onclick=\"document.documentElement.innerHTML='<h1 />'\">button</button>")
+        "data:text/html,<button onclick=\"console.log('button clicked')\">button</button>")
 
-# 2. Assert `<h1 />` is not visible.
-    await send_JSON_command(websocket, {
-        "id": 24,
-        "method": "PROTO.browsingContext.selectElement",
-        "params": {
-            "selector": "body > h1",
-            "context": contextID}})
-
-    resp = await read_JSON_message(websocket)
-    assert resp == {"id":24, "result": {}}
-
-# 3. Get the button.
-    # Send "PROTO.browsingContext.waitForSelector" command.
+# 2. Get the button.
+    # Send command.
     await send_JSON_command(websocket, {
         "id": 25,
         "method": "PROTO.browsingContext.waitForSelector",
@@ -417,13 +383,12 @@ async def test_clickElement_clickProcessed(websocket):
             "selector": "body > button",
             "context": contextID}})
 
-    # Assert "PROTO.browsingContext.waitForSelector" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     assert resp["id"] == 25
     objectID = resp["result"]["objectId"]
 
-# 4. Click the button.
-    # Send "PROTO.browsingContext.click" command.
+# 3. Click the button.
     await send_JSON_command(websocket, {
         "id": 26,
         "method": "PROTO.browsingContext.click",
@@ -431,25 +396,17 @@ async def test_clickElement_clickProcessed(websocket):
             "objectId": objectID,
             "context": contextID}})
 
-    # Assert "PROTO.browsingContext.click" command done.
+# 4. Assert console log event raised.
+    resp = await read_JSON_message(websocket)
+    assert resp == {
+        "method": "PROTO.browsingContext.consoleMessage",
+        "params": {
+            "context": contextID,
+            "value": "button clicked"}}
+
+# 5. Assert click command done.
     resp = await read_JSON_message(websocket)
     assert resp ==  {"id": 26, "result": {}}
-
-# 5. Assert `<h1 />` is visible.
-    await send_JSON_command(websocket, {
-        "id": 27,
-        "method": "PROTO.browsingContext.selectElement",
-        "params": {
-            "selector": "body > h1",
-            "context": contextID}})
-
-    resp = await read_JSON_message(websocket)
-    objectID = resp["result"]["objectId"]
-    assert resp == {
-        "id": 27,
-        "result": {
-            "type": "node",
-            "objectId": objectID}}
 
 @pytest.mark.asyncio
 async def test_selectElement_success(websocket):
@@ -457,7 +414,7 @@ async def test_selectElement_success(websocket):
     await goto_url(websocket, contextID,
         "data:text/html,<h2>test</h2>")
 
-    # Send "PROTO.browsingContext.waitForSelector" command.
+    # Send command.
     await send_JSON_command(websocket, {
         "id": 28,
         "method": "PROTO.browsingContext.selectElement",
@@ -465,7 +422,7 @@ async def test_selectElement_success(websocket):
             "selector": "body > h2",
             "context": contextID}})
 
-    # Assert "PROTO.browsingContext.waitForSelector" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     objectID = resp["result"]["objectId"]
     assert resp == {
@@ -480,7 +437,7 @@ async def test_selectElementMissingElement_missingElement(websocket):
     await goto_url(websocket, contextID,
         "data:text/html,<h2>test</h2>")
 
-    # Send "PROTO.browsingContext.waitForSelector" command.
+    # Send command.
     await send_JSON_command(websocket, {
         "id": 29,
         "method": "PROTO.browsingContext.selectElement",
@@ -488,6 +445,158 @@ async def test_selectElementMissingElement_missingElement(websocket):
             "selector": "body > h3",
             "context": contextID}})
 
-    # Assert "PROTO.browsingContext.waitForSelector" command done.
+    # Assert command done.
     resp = await read_JSON_message(websocket)
     assert resp == {"id":29, "result": {}}
+
+@pytest.mark.asyncio
+async def test_pageEvaluateWithElement_resultReceived(websocket):
+# 1. Get element.
+# 2. Evaluate script on it.
+    contextID = await get_open_context_id(websocket)
+    await goto_url(websocket, contextID,
+        "data:text/html,<h2>test</h2>")
+
+# 1. Get element.
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 30,
+        "method": "PROTO.browsingContext.selectElement",
+        "params": {
+            "selector": "body > h2",
+            "context": contextID}})
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp["id"] == 30
+    objectID = resp["result"]["objectId"]
+
+# 2. Evaluate script on it.
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 31,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "element => '!!@@##, ' + element.innerHTML",
+    # TODO: send properly serialised element according to
+    # https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
+            "args": [{
+                "objectId": objectID}],
+            "context": contextID}})
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 31, "result": "\"!!@@##, test\""}
+
+@pytest.mark.asyncio
+async def test_pageEvaluateWithoutArgs_resultReceived(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 32,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "'!!@@##, ' + window.location.href",
+            "context": contextID}})
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 32, "result": "\"!!@@##, about:blank\""}
+
+@pytest.mark.asyncio
+async def test_pageEvaluateWithScalarArgs_resultReceived(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 32,
+        "method": "PROTO.page.evaluate",
+        "params": {
+    # TODO: send properly serialised scalars according to
+    # https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
+            "args": [1, 2],
+            "function": "(a,b) => a+b",
+            "context": contextID}})
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 32, "result": "3"}
+
+@pytest.mark.asyncio
+async def test_consoleLog_consoleMessageReceived(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 33,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "console.log('some log message')",
+            "context": contextID}})
+
+    # Assert "PROTO.browsingContext.consoleMessage" event emitted.
+    resp = await read_JSON_message(websocket)
+    assert resp == {
+        "method": "PROTO.browsingContext.consoleMessage",
+        "params": {
+            "context": contextID,
+            "value": "some log message"}}
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 33}
+
+@pytest.mark.asyncio
+async def test_browsingContextType_textTyped(websocket):
+# 1. Get input element.
+# 2. Type `!!@@## test text` in.
+# 3. Assert input.value is `!!@@## test text`.
+
+    contextID = await get_open_context_id(websocket)
+    await goto_url(websocket, contextID,
+        "data:text/html,<input>")
+
+# 1. Get input element.
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 34,
+        "method": "PROTO.browsingContext.selectElement",
+        "params": {
+            "selector": "body > input",
+            "context": contextID}})
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp["id"] == 34
+    objectID = resp["result"]["objectId"]
+
+# 2. Type `!!@@## test text` in.
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 35,
+        "method": "PROTO.browsingContext.type",
+        "params": {
+            "text": "!!@@## test text",
+            "objectId": objectID,
+            "context": contextID}})
+
+    resp = await read_JSON_message(websocket)
+    assert resp ==  {"id": 35, "result": {}}
+
+# 3. Assert input.value is `!!@@## test text`.
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 36,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "element => element.value",
+    # TODO: send properly serialised element according to
+    # https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
+            "args": [{
+                "objectId": objectID}],
+            "context": contextID}})
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 36, "result": "\"!!@@## test text\""}

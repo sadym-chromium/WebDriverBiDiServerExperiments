@@ -193,7 +193,12 @@ export class ExecutionContext {
   ): Promise<ReturnType> {
     const suffix = `//# sourceURL=${EVALUATION_SCRIPT_URL}`;
 
-    if (helper.isString(pageFunction)) {
+    if (typeof pageFunction !== 'function' && !helper.isString(pageFunction))
+      throw new Error(
+        `Expected to get |string| or |function| as the first argument, but got "${pageFunction}" instead.`
+      );
+
+    if (helper.isString(pageFunction) && args.length == 0) {
       const contextId = this._contextId;
       const expression = pageFunction;
       const expressionWithSourceUrl = SOURCE_URL_REGEX.test(expression)
@@ -220,10 +225,6 @@ export class ExecutionContext {
         : createJSHandle(this, remoteObject);
     }
 
-    if (typeof pageFunction !== 'function')
-      throw new Error(
-        `Expected to get |string| or |function| as the first argument, but got "${pageFunction}" instead.`
-      );
 
     let functionText = pageFunction.toString();
     try {
