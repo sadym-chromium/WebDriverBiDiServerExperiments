@@ -597,12 +597,12 @@ export class Page extends EventEmitter {
   }
 
   private _onLogEntryAdded(event: Protocol.Log.EntryAddedEvent): void {
-    const { level, text, args, source, url, lineNumber } = event.entry;
+    const { timestamp, level, text, args, source, url, lineNumber } = event.entry;
     if (args) args.map((arg) => helper.releaseObject(this._client, arg));
     if (source !== 'worker')
       this.emit(
         PageEmittedEvents.Console,
-        new ConsoleMessage(level, text, [], [{ url, lineNumber }])
+        new ConsoleMessage(level, text, [], [{ url, lineNumber }], timestamp)
       );
   }
 
@@ -1126,7 +1126,7 @@ export class Page extends EventEmitter {
       event.executionContextId
     );
     const values = event.args.map((arg) => createJSHandle(context, arg));
-    this._addConsoleMessage(event.type, values, event.stackTrace);
+    this._addConsoleMessage(event.type, values, event.timestamp, event.stackTrace);
   }
 
   private async _onBindingCalled(
@@ -1172,6 +1172,7 @@ export class Page extends EventEmitter {
   private _addConsoleMessage(
     type: ConsoleMessageType,
     args: JSHandle[],
+    timestamp: number,
     stackTrace?: Protocol.Runtime.StackTrace
   ): void {
     if (!this.listenerCount(PageEmittedEvents.Console)) {
@@ -1191,6 +1192,7 @@ export class Page extends EventEmitter {
           url: callFrame.url,
           lineNumber: callFrame.lineNumber,
           columnNumber: callFrame.columnNumber,
+          functionName: callFrame.functionName
         });
       }
     }
@@ -1198,7 +1200,8 @@ export class Page extends EventEmitter {
       type,
       textTokens.join(' '),
       args,
-      stackTraceLocations
+      stackTraceLocations,
+      timestamp
     );
     this.emit(PageEmittedEvents.Console, message);
   }

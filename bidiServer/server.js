@@ -126,6 +126,52 @@ async function sendClientMessage(message, connection) {
   connection.sendUTF(messageStr);
 }
 
+function isPrimitive(obj) {
+  if (!obj._remoteObject)
+    return true;
+
+  if (!["object", "function", "wasm"].includes(obj._remoteObject.type))
+    return true;
+
+  if (obj._remoteObject.subtype && [
+    "null",
+    "regexp",
+    "date",
+    "error",
+    "i32",
+    "i64",
+    "f32",
+    "f64",
+    "v128"].includes(obj._remoteObject.subtype))
+    return true;
+
+  return false;
+}
+
+async function serializeForBiDi(obj) {
+  // TODO: Implement proper serialisation according to
+  // https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
+
+  console.log("!!@@## _remoteObject", obj._remoteObject);
+
+  if (isPrimitive(obj)) {
+    const val = await obj.jsonValue();
+    return {
+      type: typeof val,
+      value: val
+    };
+  }
+
+  return {
+    type: "ObjectValue",
+    objectId: obj._remoteObject.objectId,
+
+    // Not specified fields.
+    "PROTO.className": obj._remoteObject.className,
+    "PROTO.description": obj._remoteObject.description,
+  };
+}
+
 // https://w3c.github.io/webdriver-bidi/#respond-with-an-error
 function respondWithError(connection, plainCommandData, errorCode, errorMessage) {
   const errorResponse = getErrorResponse(plainCommandData, errorCode, errorMessage);
@@ -486,19 +532,52 @@ function addPageEventHandlers(pageID, page, connection) {
     }, connection);
   });
 
-  page.on('console', msg => {
-    for (let i = 0; i < msg.args().length; ++i)
-      debugBrowserConsole(`${i}: ${msg.args()[i]}`);
+  page.on('console', async msg => {
+    debugBrowserConsole(`console.log:`)
+    msg.args().map(arg => {
+      debugBrowserConsole(arg)
+    });
+
+
+    const args = await Promise.all(
+      msg.args()
+        .map(serializeForBiDi));
+
+    // TODO: Handle `console.log('%s %s', 'foo', 'bar')` case.
+    const text = msg.args()
+      .map(arg => arg.toSimpleValue())
+      .join(' ');
+
+    const stackTrace = msg.stackTrace().map(e => {
+      return {
+        url: e.url,
+        functionName: e.functionName,
+        lineNumber: e.lineNumber,
+        columnNumber: e.columnNumber
+      }
+    });
+
+    let level = "info";
+    if (["error", "assert"].includes(msg.type()))
+      level = "error";
+    if (["debug", "trace"].includes(msg.type()))
+      level = "debug";
+    if (["warn", "warning"].includes(msg.type()))
+      level = "warning";
 
     sendClientMessage({
-      method: 'PROTO.browsingContext.consoleMessage',
+      method: 'log.entryAdded',
       params: {
-        // Pupputeer `pageID` corresponds to BiDi `context`
-        context: pageID,
-        value: msg.text()
+        args: args,
+        "PROTO.context": pageID,
+        type: "console." + msg._type,
+        level: level,
+        text: text,
+        timestamp: msg.timestamp(),
+        stackTrace: stackTrace
+        // TODO: Add `extra`.
       }
     }, connection);
-
   });
 }
 

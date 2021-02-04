@@ -34,6 +34,11 @@ export interface ConsoleMessageLocation {
    * 0-based column number in the resource if known or `undefined` otherwise.
    */
   columnNumber?: number;
+
+  /**
+   * JavaScript function name.
+   */
+  functionName?: string;
 }
 
 /**
@@ -65,6 +70,7 @@ export type ConsoleMessageType =
  * @public
  */
 export class ConsoleMessage {
+  private _timestamp: number;
   private _type: ConsoleMessageType;
   private _text: string;
   private _args: JSHandle[];
@@ -77,12 +83,21 @@ export class ConsoleMessage {
     type: ConsoleMessageType,
     text: string,
     args: JSHandle[],
-    stackTraceLocations: ConsoleMessageLocation[]
+    stackTraceLocations: ConsoleMessageLocation[],
+    timestamp: number
   ) {
     this._type = type;
     this._text = text;
     this._args = args;
     this._stackTraceLocations = stackTraceLocations;
+    this._timestamp = timestamp;
+  }
+
+  /**
+   * @returns Call timestamp.
+   */
+  timestamp(): number {
+    return this._timestamp;
   }
 
   /**

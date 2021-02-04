@@ -288,6 +288,16 @@ export class JSHandle {
     }
     return 'JSHandle:' + helper.valueFromRemoteObject(this._remoteObject);
   }
+
+  toSimpleValue(): string {
+    if (this._remoteObject.objectId) {
+      const type = (this._remoteObject.preview && this._remoteObject.preview.description)
+        || this._remoteObject.subtype
+        || this._remoteObject.type;
+      return '@'+type;
+    }
+    return helper.valueFromRemoteObject(this._remoteObject);
+  }
 }
 
 /**

@@ -398,11 +398,8 @@ async def test_clickElement_clickProcessed(websocket):
 
 # 4. Assert console log event raised.
     resp = await read_JSON_message(websocket)
-    assert resp == {
-        "method": "PROTO.browsingContext.consoleMessage",
-        "params": {
-            "context": contextID,
-            "value": "button clicked"}}
+    assert resp["method"] == "log.entryAdded"
+    assert resp["params"]["text"] == "button clicked"
 
 # 5. Assert click command done.
     resp = await read_JSON_message(websocket)
@@ -535,13 +532,26 @@ async def test_consoleLog_consoleMessageReceived(websocket):
             "function": "console.log('some log message')",
             "context": contextID}})
 
-    # Assert "PROTO.browsingContext.consoleMessage" event emitted.
+    # Assert "log.entryAdded" event emitted.
     resp = await read_JSON_message(websocket)
+    timestamp = resp["params"]["timestamp"]
+    url =  resp["params"]["stackTrace"][0]["url"]
     assert resp == {
-        "method": "PROTO.browsingContext.consoleMessage",
-        "params": {
-            "context": contextID,
-            "value": "some log message"}}
+        "method":"log.entryAdded",
+        "params":{
+            "args":[{
+                "type":"string",
+                "value":"some log message"}],
+            "PROTO.context":contextID,
+            "type":"console.log",
+            "level":"info",
+            "text":"some log message",
+            "timestamp":timestamp,
+            "stackTrace":[{
+                "url":url,
+                "functionName":"",
+                "lineNumber":0,
+                "columnNumber":8}]}}
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
@@ -600,3 +610,384 @@ async def test_browsingContextType_textTyped(websocket):
     # Assert command done.
     resp = await read_JSON_message(websocket)
     assert resp == {"id": 36, "result": "\"!!@@## test text\""}
+
+@pytest.mark.asyncio
+async def test_consoleLogString_logEntryAddedEventRaised(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 37,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "console.log('some log message')",
+            "context": contextID}})
+
+    # Assert "log.entryAdded" event emitted.
+    resp = await read_JSON_message(websocket)
+    timestamp = resp["params"]["timestamp"]
+    url =  resp["params"]["stackTrace"][0]["url"]
+
+    assert resp == {
+        "method":"log.entryAdded",
+        "params":{
+            "args":[{
+                "type":"string",
+                "value":"some log message"}],
+            "PROTO.context":contextID,
+            "type":"console.log",
+            "level":"info",
+            "text":"some log message",
+            "timestamp":timestamp,
+            "stackTrace":[{
+                "url":url,
+                "functionName":"",
+                "lineNumber":0,
+                "columnNumber":8}]}}
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 37}
+
+@pytest.mark.asyncio
+async def test_consoleLogNumber_logEntryAddedEventRaised(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 38,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "console.log(1)",
+            "context": contextID}})
+
+    # Assert "log.entryAdded" event emitted.
+    resp = await read_JSON_message(websocket)
+    timestamp = resp["params"]["timestamp"]
+    url =  resp["params"]["stackTrace"][0]["url"]
+
+    assert resp == {
+        "method":"log.entryAdded",
+        "params":{
+            "args":[{
+                "type":"number",
+                "value":1}],
+            "PROTO.context":contextID,
+            "type":"console.log",
+            "level":"info",
+            "text":"1",
+            "timestamp":timestamp,
+            "stackTrace":[{
+                "url":url,
+                "functionName":"",
+                "lineNumber":0,
+                "columnNumber":8}]}}
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 38}
+
+@pytest.mark.asyncio
+async def test_consoleLogObject_logEntryAddedEventRaised(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 39,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "console.log({someField: 'someValue'})",
+            "context": contextID}})
+
+    # Assert "log.entryAdded" event emitted.
+    resp = await read_JSON_message(websocket)
+    timestamp = resp["params"]["timestamp"]
+    object_objectID = resp["params"]["args"][0]["objectId"]
+    url =  resp["params"]["stackTrace"][0]["url"]
+
+    assert resp == {
+        "method":"log.entryAdded",
+        "params":{
+            "args":[{
+                "type":"ObjectValue",
+                "objectId":object_objectID,
+                "PROTO.className":"Object",
+                "PROTO.description":"Object"}],
+            "PROTO.context":contextID,
+            "type":"console.log",
+            "level":"info",
+            "text":"@Object",
+            "timestamp":timestamp,
+            "stackTrace":[{
+                "url":url,
+                "functionName":"",
+                "lineNumber":0,
+                "columnNumber":8}]}}
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 39}
+
+@pytest.mark.asyncio
+async def test_consoleLogArray_logEntryAddedEventRaised(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 40,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "console.log([2, \"asd\"])",
+            "context": contextID}})
+
+    # Assert "log.entryAdded" event emitted.
+    resp = await read_JSON_message(websocket)
+    timestamp = resp["params"]["timestamp"]
+    array_objectID = resp["params"]["args"][0]["objectId"]
+    url =  resp["params"]["stackTrace"][0]["url"]
+
+    assert resp == {
+        "method":"log.entryAdded",
+        "params":{
+            "args":[{
+                "type":"ObjectValue",
+                "objectId":array_objectID,
+                "PROTO.className":"Array",
+                "PROTO.description":"Array(2)"}],
+            "PROTO.context":contextID,
+            "type":"console.log",
+            "level":"info",
+            "text":"@Array(2)",
+            "timestamp":timestamp,
+            "stackTrace":[{
+                "url":url,
+                "functionName":"",
+                "lineNumber":0,
+                "columnNumber":8}]}}
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 40}
+
+@pytest.mark.asyncio
+async def test_consoleLogWindow_logEntryAddedEventRaised(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 41,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "console.log(window)",
+            "context": contextID}})
+
+    # Assert "log.entryAdded" event emitted.
+    resp = await read_JSON_message(websocket)
+    timestamp = resp["params"]["timestamp"]
+    window_objectID = resp["params"]["args"][0]["objectId"]
+    function_objectID = resp["params"]["args"][0]["objectId"]
+    url =  resp["params"]["stackTrace"][0]["url"]
+
+    assert resp == {
+        "method":"log.entryAdded",
+        "params":{
+            "args":[{
+                "type":"ObjectValue",
+                "objectId":window_objectID,
+                "PROTO.className":"Window",
+                "PROTO.description":"Window"}],
+            "PROTO.context":contextID,
+            "type":"console.log",
+            "level":"info",
+            "text":"@Window",
+            "timestamp":timestamp,
+            "stackTrace":[{
+                "url":url,
+                "functionName":"",
+                "lineNumber":0,
+                "columnNumber":8}]}}
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 41}
+
+@pytest.mark.asyncio
+async def test_consoleLogFunction_logEntryAddedEventRaised(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 42,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "console.log(function(){})",
+            "context": contextID}})
+
+    # Assert "log.entryAdded" event emitted.
+    resp = await read_JSON_message(websocket)
+    timestamp = resp["params"]["timestamp"]
+    function_objectID = resp["params"]["args"][0]["objectId"]
+    url =  resp["params"]["stackTrace"][0]["url"]
+
+    assert resp == {
+        "method":"log.entryAdded",
+        "params":{
+            "args":[{
+                "type":"ObjectValue",
+                "objectId":function_objectID,
+                "PROTO.className":"Function",
+                "PROTO.description":"function(){}"}],
+            "PROTO.context":contextID,
+            "type":"console.log",
+            "level":"info",
+            "text":"@function",
+            "timestamp":timestamp,
+            "stackTrace":[{
+                "url":url,
+                "functionName":"",
+                "lineNumber":0,
+                "columnNumber":8}]}}
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 42}
+
+@pytest.mark.asyncio
+async def test_consoleInfo_logEntryAddedEventRaised(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 43,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "console.info('some log message')",
+            "context": contextID}})
+
+    # Assert "log.entryAdded" event emitted.
+    resp = await read_JSON_message(websocket)
+    timestamp = resp["params"]["timestamp"]
+    url =  resp["params"]["stackTrace"][0]["url"]
+
+    assert resp == {
+        "method":"log.entryAdded",
+        "params":{
+            "args":[{
+                "type":"string",
+                "value":"some log message"}],
+            "PROTO.context":contextID,
+            "type":"console.info",
+            "level":"info",
+            "text":"some log message",
+            "timestamp":timestamp,
+            "stackTrace":[{
+                "url":url,
+                "functionName":"",
+                "lineNumber":0,
+                "columnNumber":8}]}}
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 43}
+
+@pytest.mark.asyncio
+async def test_consoleError_logEntryAddedEventRaised(websocket):
+    contextID = await get_open_context_id(websocket)
+
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 44,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "console.error('some log message')",
+            "context": contextID}})
+
+    # Assert "log.entryAdded" event emitted.
+    resp = await read_JSON_message(websocket)
+    timestamp = resp["params"]["timestamp"]
+    url =  resp["params"]["stackTrace"][0]["url"]
+
+    assert resp == {
+        "method":"log.entryAdded",
+        "params":{
+            "args":[{
+                "type":"string",
+                "value":"some log message"}],
+            "PROTO.context":contextID,
+            "type":"console.error",
+            "level":"error",
+            "text":"some log message",
+            "timestamp":timestamp,
+            "stackTrace":[{
+                "url":url,
+                "functionName":"",
+                "lineNumber":0,
+                "columnNumber":8}]}}
+
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp == {"id": 44}
+
+
+# TODO: implement numbers serialization.
+# @pytest.mark.asyncio
+# async def test_consoleLogNumbers_logEntryAddedEventRaised(websocket):
+#     contextID = await get_open_context_id(websocket)
+#     # Send command.
+#     await send_JSON_command(websocket, {
+#         "id": 38,
+#         "method": "PROTO.page.evaluate",
+#         "params": {
+#             "function": "console.log(1, NaN, -0, +Infinity, -Infinity)",
+#             "context": contextID}})
+#     # Assert "log.entryAdded" event emitted.
+#     resp = await read_JSON_message(websocket)
+#     timestamp = resp["params"]["timestamp"]
+#     url =  resp["params"]["stackTrace"][0]["url"]
+#     assert resp == {
+#         "method":"log.entryAdded",
+#         "params":{
+#             "args":[{
+#                 "type":"NumberValue",
+#                 "value":1
+#             },{
+#                 "type":"NumberValue",
+#                 "value":"NaN"
+#             },{
+#                 "type":"NumberValue",
+#                 "value":"-0"
+#             },{
+#                 "type":"NumberValue",
+#                 "value":"+Infinity"
+#             },{
+#                 "type":"NumberValue",
+#                 "value":"-Infinity"}],
+#             "PROTO.context":contextID,
+#             "type":"console.log",
+#             "level":"info",
+#             "text":"1 NaN -0 +Infinity -Infinity",
+#             "timestamp":timestamp,
+#             "stackTrace":[{
+#                 "url":url,
+#                 "functionName":"",
+#                 "lineNumber":0,
+#                 "columnNumber":8}]}}
+#     assert resp == {
+#         "method":"log.entryAdded",
+#         "params":{
+#             "args":[{
+#                 "type":"number",
+#                 "value":1}],
+#             "PROTO.context":contextID,
+#             "type":"console.log",
+#             "level":"info",
+#             "text":"1",
+#             "timestamp":timestamp,
+#             "stackTrace":[{
+#                 "url":url,
+#                 "functionName":"",
+#                 "lineNumber":0,
+#                 "columnNumber":8}]}}
+#     # Assert command done.
+#     resp = await read_JSON_message(websocket)
+#     assert resp == {"id": 38}
