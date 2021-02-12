@@ -22,7 +22,7 @@ const WebSocketServer = require('websocket').server;
 const http = require('http');
 const debug = require('debug');
 
-const debugBrowserConsole = debug('Remote:console ◀');
+const debugBiDiServer = debug('Server:console ◀');
 const debugBiDiSend = debug('BiDi:SEND ►');
 const debugBiDiReceive = debug('BiDi:RECV ◀');
 
@@ -51,7 +51,7 @@ const wsServer = new WebSocketServer({
 const ignoredTargetTypes = ['browser', 'iframe', 'service_worker'];
 
 function originIsAllowed(origin) {
-  console.log("origin: ", origin);
+  debugBiDiServer("origin: ", origin);
   return true;
 }
 
@@ -120,7 +120,7 @@ function getErrorResponse(plainCommandData, errorCode, errorMessage) {
   };
 }
 
-async function sendClientMessage(message, connection) {
+function sendClientMessage(message, connection) {
   const messageStr = JSON.stringify(message);
   debugBiDiSend(messageStr);
   connection.sendUTF(messageStr);
@@ -151,9 +151,6 @@ function isPrimitive(obj) {
 async function serializeForBiDi(obj) {
   // TODO: Implement proper serialisation according to
   // https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
-
-  console.log("!!@@## _remoteObject", obj._remoteObject);
-
   if (isPrimitive(obj)) {
     const val = await obj.jsonValue();
     return {
@@ -163,12 +160,8 @@ async function serializeForBiDi(obj) {
   }
 
   return {
-    type: "ObjectValue",
+    type: "object",
     objectId: obj._remoteObject.objectId,
-
-    // Not specified fields.
-    "PROTO.className": obj._remoteObject.className,
-    "PROTO.description": obj._remoteObject.description,
   };
 }
 
@@ -189,25 +182,28 @@ wsServer.on('request', async function (request) {
     return;
   }
 
+  // Launch browser for the newly created session.
   try {
-    // Launch browser for the newly created session.
     session.browser = await puppeteer.launch({ headless });
-    session.connection = request.accept();
-    addBrowserEventHandlers(session.browser, session.connection);
   } catch (e) {
-    console.log("Connection rejected: ", e);
-    console.log((new Date()) + ' Connection from origin ' + request.origin + ' rejected.');
+    console.log((new Date()) + ' Cannot launch browser.', e);
     return;
   }
 
-  console.log((new Date()) + ' Connection accepted.');
+  try {
+    session.connection = request.accept();
+  } catch (e) {
+    console.log((new Date()) + ' Cannot accept connection from origin', request.origin, e);
+    session.browser.close();
+    return;
+  }
 
   session.connection.on('close', function () {
     console.log((new Date()) + ' Peer ' + session.connection.remoteAddress + ' disconnected.');
     session.browser.close();
   });
 
-  addConnectionEventHandlers(session.browser, session.connection);
+  addBrowserEventHandlers(session.browser, session.connection);
 
   // https://w3c.github.io/webdriver-bidi/#handle-an-incoming-message
   session.connection.on('message', function (message) {
@@ -304,6 +300,37 @@ async function processCommand(commandData, session) {
   }
 }
 
+function addPageEventHandlers(pageID, page, connection) {
+  // Events specified in https://w3c.github.io/webdriver-bidi should be here.
+
+  // Debug events not specified in https://w3c.github.io/webdriver-bidi.
+  page.on('load', () => {
+    handle_pageLoad_event(pageID, connection)
+  });
+
+  page.on('console', async msg => {
+    handle_pageConsole_event(msg, pageID, connection);
+  });
+}
+
+function addBrowserEventHandlers(browser, connection) {
+  // Events specified in https://w3c.github.io/webdriver-bidi.
+  browser.on('targetcreated', (target) => {
+    handle_browserTargetcreated_event(target, connection);
+  });
+
+  browser.on('targetdestroyed', (target) => {
+    handle_browserTargetdestroyed_event(target, connection);
+  });
+
+  // Debug events not specified in https://w3c.github.io/webdriver-bidi
+  // should be here.
+  browser.on('disconnected', () => {
+    handle_browserDisconnected_event(connection);
+  });
+}
+
+// Command processors
 async function process_PROTO_browsingContext_createContext(params, session, response) {
   const page = await session.browser.newPage(params.url);
 
@@ -511,98 +538,80 @@ async function process_session_status(params, session, response) {
 // Events handlers
 // TODO: Add events filtering.
 
-function addConnectionEventHandlers(browser, connection) {
-  browser.on('disconnected', () => {
-    respondWithError(connection, {}, "unknown error", "browser closed");
-    connection.close();
-  });
+function handle_pageLoad_event(pageID, connection) {
+  sendClientMessage({
+    method: 'DEBUG.Page.load',
+    params: {
+      // Pupputeer `pageID` corresponds to BiDi `context`
+      context: pageID
+    }
+  }, connection);
 }
+async function handle_pageConsole_event(msg, pageID, connection) {
+  const args = await Promise.all(
+    msg.args()
+      .map(serializeForBiDi));
 
-function addPageEventHandlers(pageID, page, connection) {
-  // Events specified in https://w3c.github.io/webdriver-bidi should be here.
+  // TODO: Handle `console.log('%s %s', 'foo', 'bar')` case.
+  const text = msg.args()
+    .map(arg => arg.toSimpleValue())
+    .join(' ');
 
-  // Debug events not specified in https://w3c.github.io/webdriver-bidi.
-  page.on('load', () => {
-    sendClientMessage({
-      method: 'DEBUG.Page.load',
-      params: {
-        // Pupputeer `pageID` corresponds to BiDi `context`
-        context: pageID
-      }
-    }, connection);
-  });
-
-  page.on('console', async msg => {
-    debugBrowserConsole(`console.log:`)
-    msg.args().map(arg => {
-      debugBrowserConsole(arg)
-    });
-
-
-    const args = await Promise.all(
-      msg.args()
-        .map(serializeForBiDi));
-
-    // TODO: Handle `console.log('%s %s', 'foo', 'bar')` case.
-    const text = msg.args()
-      .map(arg => arg.toSimpleValue())
-      .join(' ');
-
-    const stackTrace = msg.stackTrace().map(e => {
-      return {
-        url: e.url,
-        functionName: e.functionName,
-        lineNumber: e.lineNumber,
-        columnNumber: e.columnNumber
-      }
-    });
-
-    let level = "info";
-    if (["error", "assert"].includes(msg.type()))
-      level = "error";
-    if (["debug", "trace"].includes(msg.type()))
-      level = "debug";
-    if (["warn", "warning"].includes(msg.type()))
-      level = "warning";
-
-    sendClientMessage({
-      method: 'log.entryAdded',
-      params: {
-        args: args,
-        "PROTO.context": pageID,
-        type: "console." + msg._type,
-        level: level,
-        text: text,
-        timestamp: msg.timestamp(),
-        stackTrace: stackTrace
-        // TODO: Add `extra`.
-      }
-    }, connection);
-  });
-}
-
-function addBrowserEventHandlers(browser, connection) {
-  // Events specified in https://w3c.github.io/webdriver-bidi.
-  browser.on('targetcreated', (t) => {
-    if (!ignoredTargetTypes.includes(t._targetInfo.type)) {
-      sendClientMessage({
-        method: 'browsingContext.contextCreated',
-        params: getBrowsingContextInfo(t)
-      }, connection);
+  const stackTrace = msg.stackTrace().map(e => {
+    return {
+      url: e.url,
+      functionName: e.functionName,
+      lineNumber: e.lineNumber,
+      columnNumber: e.columnNumber
     }
   });
 
-  browser.on('targetdestroyed', (t) => {
-    if (!ignoredTargetTypes.includes(t._targetInfo.type)) {
-      sendClientMessage({
-        method: 'browsingContext.contextDestroyed',
-        params: getBrowsingContextInfo(t)
-      }, connection);
-    }
-  });
+  let level = "info";
+  if (["error", "assert"].includes(msg.type()))
+    level = "error";
+  if (["debug", "trace"].includes(msg.type()))
+    level = "debug";
+  if (["warn", "warning"].includes(msg.type()))
+    level = "warning";
 
-  // Debug events not specified in https://w3c.github.io/webdriver-bidi
-  // should be here.
+  sendClientMessage({
+    method: 'log.entryAdded',
+    params: {
+      // BaseLogEntry
+      level,
+      text,
+      timestamp: msg.timestamp(),
+      stackTrace,
+      // ConsoleLogEntry
+      type: "console",
+      method: msg.type(),
+      // TODO: Replace `PROTO.context` with `realm`
+      "PROTO.context": pageID,
+      args,
+    }
+  }, connection);
+}
+
+async function handle_browserDisconnected_event(connection) {
+  respondWithError(connection, {}, "unknown error", "browser closed");
+  connection.close();
+}
+
+async function handle_browserTargetcreated_event(target, connection) {
+  if (!ignoredTargetTypes.includes(target._targetInfo.type)) {
+    sendClientMessage({
+      method: 'browsingContext.contextCreated',
+      params: getBrowsingContextInfo(target)
+    }, connection);
+  }
+}
+async function handle_browserTargetdestroyed_event(target, connection) {
+  if (!ignoredTargetTypes.includes(target._targetInfo.type)) {
+    sendClientMessage({
+      method: 'browsingContext.contextDestroyed',
+      params: getBrowsingContextInfo(target)
+    }, connection);
+  }
 }
 
 // Data contracts
