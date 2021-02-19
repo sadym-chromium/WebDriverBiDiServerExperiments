@@ -151,6 +151,101 @@ function isPrimitive(obj) {
 async function serializeForBiDi(obj) {
   // TODO: Implement proper serialisation according to
   // https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
+
+  debugBiDiServer("serializeForBiDi", obj);
+
+  if (obj._remoteObject) {
+    if (obj._remoteObject.type === 'undefined') {
+      return { type: "undefined" };
+    }
+    if (obj._remoteObject.type === "string") {
+      return {
+        type: "string",
+        value: obj._remoteObject.value
+      };
+    }
+    if (obj._remoteObject.type === "number") {
+      if (obj._remoteObject.unserializableValue) {
+        if (obj._remoteObject.unserializableValue === "Infinity") {
+          return {
+            type: "number",
+            value: "+Infinity"
+          };
+        }
+
+        return {
+          type: "number",
+          value: obj._remoteObject.unserializableValue
+        };
+      }
+      return {
+        type: "number",
+        value: obj._remoteObject.value
+      };
+    }
+
+    if (obj._remoteObject.type === "bigint") {
+      return {
+        type: "bigint",
+        value: obj._remoteObject.unserializableValue
+      };
+    }
+
+    if (obj._remoteObject.type === "symbol") {
+      return {
+        type: "symbol",
+        objectId: obj._remoteObject.objectId,
+      };
+    }
+
+    if (obj._remoteObject.type === "function") {
+      return {
+        type: "function",
+        objectId: obj._remoteObject.objectId,
+      };
+    }
+
+    if (obj._remoteObject.type === "object") {
+      if (obj._remoteObject.subtype === "null") {
+        return { type: "null" };
+      }
+      if (obj._remoteObject.subtype === "regexp") {
+        return {
+          type: "regexp",
+          objectId: obj._remoteObject.objectId,
+          value: obj._remoteObject.description
+        };
+      }
+      if (obj._remoteObject.subtype === "date") {
+        return {
+          type: "date",
+          objectId: obj._remoteObject.objectId,
+          value: new Date(obj._remoteObject.description).toString()
+        };
+      }
+      if (obj._remoteObject.subtype === "error") {
+        return {
+          type: "error",
+          objectId: obj._remoteObject.objectId
+        };
+      }
+      if (obj._remoteObject.subtype === "node") {
+        return {
+          type: "node",
+          objectId: obj._remoteObject.objectId,
+          // TODO: add value?: NodeProperties.
+          // https://w3c.github.io/webdriver-bidi/#type-common-RemoteValue
+        };
+      }
+      if (obj._remoteObject.className === "Window") {
+        return {
+          type: "window",
+          objectId: obj._remoteObject.objectId
+        };
+      }
+    }
+  }
+
   if (isPrimitive(obj)) {
     const val = await obj.jsonValue();
     return {
@@ -336,12 +431,12 @@ async function process_PROTO_browsingContext_createContext(params, session, resp
 
   // Use CDP targetID for mapping.
   const pageID = page.target()._targetId;
-  session.pages[pageID] = page;
+  if (!(pageID in session.pages)) {
+    session.pages[pageID] = page;
+    addPageEventHandlers(pageID, page, session.connection);
+  }
 
   response.result = getBrowsingContextInfo(page.target());
-
-  addPageEventHandlers(pageID, page, session.connection);
-
   return response;
 }
 
@@ -503,13 +598,15 @@ async function process_browsingContext_getTree(params, session, response) {
     const pageID = t._targetId;
     const page = await t.page();
 
-    // After the page exposed to the external world,
-    // it's events has to be processed.
-    addPageEventHandlers(pageID, page, session.connection)
+    if (!(pageID in session.pages)) {
+      // After the page exposed to the BiDi client,
+      // it's events has to be processed.
+      addPageEventHandlers(pageID, page, session.connection)
 
-    // For now pages need to be stored in the map.
-    // Can be replaced with getting page object by ID on demand.
-    session.pages[pageID] = page;
+      // For now pages need to be stored in the map.
+      // Can be replaced with getting page object by ID on demand.
+      session.pages[pageID] = page;
+    }
   }
 
   const contexts = targets
