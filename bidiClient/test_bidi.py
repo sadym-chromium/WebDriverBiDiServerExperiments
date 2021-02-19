@@ -277,7 +277,11 @@ async def test_waitForSelector_success_slow(websocket):
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
-    assert resp == {"id":19,"result":"\"<h2 />\""}
+    assert resp == {
+        "id":19,
+        "result":{
+            "type":"string",
+            "value":"<h2 />"}}
 
 # 4. Wait for newly created element.
     await send_JSON_command(websocket, {
@@ -365,7 +369,7 @@ async def test_clickElement_clickProcessed(websocket):
 # 1. Open page with button and click handler. Button click logs message.
 # 2. Get the button.
 # 3. Click the button.
-# 4. Assert console log event raised.
+# 4. Assert console log event emmited.
 # 5. Assert click command done.
 
     contextID = await get_open_context_id(websocket)
@@ -396,7 +400,7 @@ async def test_clickElement_clickProcessed(websocket):
             "objectId": objectID,
             "context": contextID}})
 
-# 4. Assert console log event raised.
+# 4. Assert console log event emmited.
     resp = await read_JSON_message(websocket)
     assert resp["method"] == "log.entryAdded"
     assert resp["params"]["text"] == "button clicked"
@@ -483,7 +487,11 @@ async def test_pageEvaluateWithElement_resultReceived(websocket):
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
-    assert resp == {"id": 31, "result": "\"!!@@##, test\""}
+    assert resp == {
+        "id":31,
+        "result":{
+            "type":"string",
+            "value":"!!@@##, test"}}
 
 @pytest.mark.asyncio
 async def test_pageEvaluateWithoutArgs_resultReceived(websocket):
@@ -499,7 +507,11 @@ async def test_pageEvaluateWithoutArgs_resultReceived(websocket):
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
-    assert resp == {"id": 32, "result": "\"!!@@##, about:blank\""}
+    assert resp == {
+        "id":32,
+        "result":{
+            "type":"string",
+            "value":"!!@@##, about:blank"}}
 
 @pytest.mark.asyncio
 async def test_pageEvaluateWithScalarArgs_resultReceived(websocket):
@@ -507,7 +519,7 @@ async def test_pageEvaluateWithScalarArgs_resultReceived(websocket):
 
     # Send command.
     await send_JSON_command(websocket, {
-        "id": 32,
+        "id": 45,
         "method": "PROTO.page.evaluate",
         "params": {
     # TODO: send properly serialised scalars according to
@@ -518,10 +530,14 @@ async def test_pageEvaluateWithScalarArgs_resultReceived(websocket):
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
-    assert resp == {"id": 32, "result": "3"}
+    assert resp == {
+        "id":45,
+        "result":{
+            "type":"number",
+            "value":3}}
 
 @pytest.mark.asyncio
-async def test_consoleLog_logEntryAddedEventRaised(websocket):
+async def test_consoleLog_logEntryAddedEventEmmited(websocket):
     contextID = await get_open_context_id(websocket)
 
     # Send command.
@@ -552,7 +568,7 @@ async def test_consoleLog_logEntryAddedEventRaised(websocket):
             # ConsoleLogEntry
             "type": "console",
             "method": "log",
-            # TODO: Replace `PROTO.context` with `realm`
+            # TODO: replace `PROTO.context` with `realm`.
             "PROTO.context":contextID,
             "args":[{
                 "type":"string",
@@ -560,7 +576,9 @@ async def test_consoleLog_logEntryAddedEventRaised(websocket):
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
-    assert resp == {"id": 33}
+    assert resp == {
+        "id":33,
+        "result":{"type":"undefined"}}
 
 @pytest.mark.asyncio
 async def test_browsingContextType_textTyped(websocket):
@@ -614,10 +632,14 @@ async def test_browsingContextType_textTyped(websocket):
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
-    assert resp == {"id": 36, "result": "\"!!@@## test text\""}
+    assert resp == {
+        "id":36,
+        "result":{
+            "type":"string",
+            "value":"!!@@## test text"}}
 
 @pytest.mark.asyncio
-async def test_consoleInfo_logEntryWithMethodInfoRaised(websocket):
+async def test_consoleInfo_logEntryWithMethodInfoEmmited(websocket):
     contextID = await get_open_context_id(websocket)
 
     # Send command.
@@ -636,10 +658,12 @@ async def test_consoleInfo_logEntryWithMethodInfoRaised(websocket):
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
-    assert resp == {"id": 43}
+    assert resp == {
+        "id":43,
+        "result":{"type":"undefined"}}
 
 @pytest.mark.asyncio
-async def test_consoleError_logEntryWithMethodErrorRaised(websocket):
+async def test_consoleError_logEntryWithMethodErrorEmmited(websocket):
     contextID = await get_open_context_id(websocket)
 
     # Send command.
@@ -658,7 +682,9 @@ async def test_consoleError_logEntryWithMethodErrorRaised(websocket):
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
-    assert resp == {"id": 44}
+    assert resp == {
+        "id":44,
+        "result":{"type":"undefined"}}
 
 # Testing serialisation.
 async def assertSerialisation(jsStrObject, expectedSerialisedObject, hasObjectId, websocket):
@@ -669,25 +695,19 @@ async def assertSerialisation(jsStrObject, expectedSerialisedObject, hasObjectId
         "id": 9997,
         "method": "PROTO.page.evaluate",
         "params": {
-            "function": f"console.log({jsStrObject})",
+            "function": f"({jsStrObject})",
             "context": contextID}})
-
-    # Assert argument serialised.
-    resp = await read_JSON_message(websocket)
-
-    assert resp["method"] == "log.entryAdded"
-    assert len(resp["params"]["args"]) == 1
-
-    # Enrich expected result with `objectId` if needed.
-    if hasObjectId:
-        objectId = resp["params"]["args"][0]["objectId"]
-        expectedSerialisedObject["objectId"] = objectId
-
-    assert resp["params"]["args"][0] == expectedSerialisedObject
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
-    assert resp == {"id": 9997}
+    assert resp["id"] == 9997
+
+    # Enrich expected result with `objectId` if needed.
+    if hasObjectId:
+        objectId = resp["result"]["objectId"]
+        expectedSerialisedObject["objectId"] = objectId
+
+    assert resp["result"] == expectedSerialisedObject
 
 @pytest.mark.asyncio
 async def test_serialisation_undefined(websocket):
@@ -703,6 +723,7 @@ async def test_serialisation_null(websocket):
         {"type":"null"},
         False, websocket)
 
+# TODO: test escaping, null bytes string, lone surrogates.
 @pytest.mark.asyncio
 async def test_serialisation_string(websocket):
     await assertSerialisation(
@@ -720,6 +741,12 @@ async def test_serialisation_number(websocket):
             "type":"number",
             "value":123},
         False, websocket)
+    await assertSerialisation(
+        "0.56",
+        {
+            "type":"number",
+            "value":0.56},
+        False, websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_specialNumber(websocket):
@@ -729,21 +756,18 @@ async def test_serialisation_specialNumber(websocket):
             "type":"number",
             "value":"+Infinity"},
         False, websocket)
-
     await assertSerialisation(
         "-Infinity",
         {
             "type":"number",
             "value":"-Infinity"},
         False, websocket)
-
     await assertSerialisation(
         "-0",
         {
             "type":"number",
             "value":"-0"},
         False, websocket)
-
     await assertSerialisation(
         "NaN",
         {
@@ -772,14 +796,17 @@ async def test_serialisation_bigint(websocket):
         "BigInt('12345678901234567890')",
         {
             "type":"bigint",
-            "value":"12345678901234567890n"},
+            "value":"12345678901234567890"},
         False, websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_symbol(websocket):
     await assertSerialisation(
         "Symbol('foo')",
-        {"type":"symbol"},
+        {
+            "type":"symbol",
+            "PROTO.description":"foo"
+            },
         True, websocket)
 
 @pytest.mark.asyncio
@@ -798,7 +825,7 @@ async def test_serialisation_regExp(websocket):
             "value":"/ab+c/"},
         True, websocket)
 
-# TODO: check timezone serialisation
+# TODO: check timezone serialisation.
 @pytest.mark.asyncio
 async def test_serialisation_date(websocket):
     await assertSerialisation(
@@ -822,6 +849,8 @@ async def test_serialisation_error(websocket):
         {"type":"error"},
         True, websocket)
 
+# TODO: add `NodeProperties` after serialisation MaxDepth logic specified:
+# https://github.com/w3c/webdriver-bidi/issues/86.
 @pytest.mark.asyncio
 async def test_serialisation_node(websocket):
     await assertSerialisation(
@@ -829,7 +858,7 @@ async def test_serialisation_node(websocket):
         {"type":"node"},
         True, websocket)
 
-# # TODO: Implement after serialisation MaxDepth logic specified:
+# # TODO: implement after serialisation MaxDepth logic specified:
 # # https://github.com/w3c/webdriver-bidi/issues/86
 # @pytest.mark.asyncio
 # async def test_serialisation_array(websocket):
@@ -855,7 +884,7 @@ async def test_serialisation_node(websocket):
 #         },
 #         True, websocket)
 
-# # TODO: Implement after serialisation MaxDepth logic specified:
+# # TODO: implement after serialisation MaxDepth logic specified:
 # # https://github.com/w3c/webdriver-bidi/issues/86
 # @pytest.mark.asyncio
 # async def test_serialisation_object(websocket):
@@ -872,7 +901,7 @@ async def test_serialisation_node(websocket):
 #         },
 #         True, websocket)
 
-# TODO: Implement proper serialisation according to
+# TODO: implement proper serialisation according to
 # https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
 
 # @pytest.mark.asyncio

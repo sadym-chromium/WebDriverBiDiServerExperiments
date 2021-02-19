@@ -116,7 +116,7 @@ function getErrorResponse(plainCommandData, errorCode, errorMessage) {
     id: commandId,
     error: errorCode,
     message: errorMessage,
-    // TODO: optional stacktrace field
+    // TODO: optional stacktrace field.
   };
 }
 
@@ -149,7 +149,7 @@ function isPrimitive(obj) {
 }
 
 async function serializeForBiDi(obj) {
-  // TODO: Implement proper serialisation according to
+  // TODO: implement proper serialisation according to
   // https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
 
   debugBiDiServer("serializeForBiDi", obj);
@@ -187,14 +187,22 @@ async function serializeForBiDi(obj) {
     if (obj._remoteObject.type === "bigint") {
       return {
         type: "bigint",
-        value: obj._remoteObject.unserializableValue
+        // `unserializableValue` has a trailing `n` like `123n`. It should not
+        // be in the BiDi serialised value. Remove trailing `n`.
+        value: obj._remoteObject.unserializableValue.replace(/n$/, "")
       };
     }
 
     if (obj._remoteObject.type === "symbol") {
+      // CDP description has a format 'Symbol(foo)',
+      // while BiDi should contain only`foo`.
+      const description = obj._remoteObject.description
+        .match(/^Symbol\((.*)\)$/)[1];
+
       return {
         type: "symbol",
         objectId: obj._remoteObject.objectId,
+        "PROTO.description": description
       };
     }
 
@@ -271,7 +279,7 @@ wsServer.on('request', async function (request) {
   const session = { pages: {}, elements: {} };
 
   if (!originIsAllowed(request.origin)) {
-    // Make sure we only accept requests from an allowed origin
+    // Make sure we only accept requests from an allowed origin.
     request.reject();
     console.log((new Date()) + ' Connection from origin ' + request.origin + ' rejected.');
     return;
@@ -314,7 +322,7 @@ wsServer.on('request', async function (request) {
     // 2. Assert: |data| is a scalar value string, because the WebSocket
     //    handling errors in UTF-8-encoded data would already have
     //    failed the WebSocket connection otherwise.
-    // TODO: Is this already handled correctly by the websocket library?
+    // TODO: is this already handled correctly by the websocket library?
 
     // 3. Match |data| against the remote end definition.
     let commandData;
@@ -334,7 +342,7 @@ wsServer.on('request', async function (request) {
 });
 
 function getPage(commandData, session) {
-  // Puppeteer `page` corresponds to BiDi `context`
+  // Puppeteer `page` corresponds to BiDi `context`.
   const pageID = commandData.context;
   if (!(pageID in session.pages)) {
     throw new Error('context not found');
@@ -344,7 +352,7 @@ function getPage(commandData, session) {
 }
 
 function getElement(commandData, session) {
-  // Puppeteer `element` corresponds to BiDi `object`
+  // Puppeteer `element` corresponds to BiDi `object`.
   const elementID = commandData.objectId;
 
   if (!(elementID in session.elements)) {
@@ -425,7 +433,7 @@ function addBrowserEventHandlers(browser, connection) {
   });
 }
 
-// Command processors
+// Command processors.
 async function process_PROTO_browsingContext_createContext(params, session, response) {
   const page = await session.browser.newPage(params.url);
 
@@ -573,24 +581,21 @@ async function process_PROTO_page_evaluate(params, session, response) {
       if (arg.objectId) {
         args.push(getElement(arg, session));
       } else {
-        // TODO: Implement proper scalar deserialisation according to
+        // TODO: implement proper scalar deserialisation according to
         // https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
         args.push(arg);
       }
     }
   }
-  const result = await page.evaluate.apply(page, args);
 
-  // TODO: Implement proper scalar serialisation according to
-  // https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
-  response.result = JSON.stringify(result);
+  const result = await page.evaluateHandle.apply(page, args);
+  response.result = await serializeForBiDi(result);
 
   return response;
 }
 
 async function process_browsingContext_getTree(params, session, response) {
-  // BiDi `context` corresponds to puppeteer `target`
-
+  // BiDi `context` corresponds to puppeteer `target`.
   const targets = session.browser.targets()
     .filter(t => !ignoredTargetTypes.includes(t._targetInfo.type));
 
@@ -632,14 +637,14 @@ async function process_session_status(params, session, response) {
   return response;
 }
 
-// Events handlers
-// TODO: Add events filtering.
+// Events handlers.
+// TODO: add events filtering.
 
 function handle_pageLoad_event(pageID, connection) {
   sendClientMessage({
     method: 'DEBUG.Page.load',
     params: {
-      // Pupputeer `pageID` corresponds to BiDi `context`
+      // Pupputeer `pageID` corresponds to BiDi `context`.
       context: pageID
     }
   }, connection);
@@ -649,7 +654,7 @@ async function handle_pageConsole_event(msg, pageID, connection) {
     msg.args()
       .map(serializeForBiDi));
 
-  // TODO: Handle `console.log('%s %s', 'foo', 'bar')` case.
+  // TODO: handle `console.log('%s %s', 'foo', 'bar')` case.
   const text = msg.args()
     .map(arg => arg.toSimpleValue())
     .join(' ');
@@ -674,15 +679,15 @@ async function handle_pageConsole_event(msg, pageID, connection) {
   sendClientMessage({
     method: 'log.entryAdded',
     params: {
-      // BaseLogEntry
+      // BaseLogEntry:
       level,
       text,
       timestamp: msg.timestamp(),
       stackTrace,
-      // ConsoleLogEntry
+      // ConsoleLogEntry:
       type: "console",
       method: msg.type(),
-      // TODO: Replace `PROTO.context` with `realm`
+      // TODO: replace `PROTO.context` with `realm`.
       "PROTO.context": pageID,
       args,
     }
@@ -711,17 +716,17 @@ async function handle_browserTargetdestroyed_event(target, connection) {
   }
 }
 
-// Data contracts
+// Data contracts:
 function getBrowsingContextInfo(target) {
   return {
     // Properties specified in https://w3c.github.io/webdriver-bidi.
     context: target._targetId,
     parent: target.opener() ? target.opener().id() : null,
     url: target.url(),
-    // TODO add `children` field.
+    // TODO: add `children` field.
 
     // Debug properties not specified in https://w3c.github.io/webdriver-bidi.
-    // 'DEBUG.type': target._targetInfo.type
+    // 'DEBUG.type': target._targetInfo.type.
   }
 }
 
