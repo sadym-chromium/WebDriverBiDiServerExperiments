@@ -11,6 +11,24 @@ async def websocket():
     async with websockets.connect(url) as connection:
         yield connection
 
+# Compares 2 objects recursively ignoring values of specific attributes.
+def recursiveCompare(expected, actual, ignoreAttributes):
+    assert type(expected) == type(actual)
+    if type(expected) is list:
+        assert len(expected) == len(actual)
+        for index, val in enumerate(expected):
+            recursiveCompare(expected[index], actual[index], ignoreAttributes)
+        return
+
+    if type(expected) is dict:
+        assert expected.keys() == actual.keys()
+        for index, val in enumerate(expected):
+            if val not in ignoreAttributes:
+                recursiveCompare(expected[val], actual[val], ignoreAttributes)
+        return
+
+    assert expected == actual
+
 # Returns the only open contextID.
 # Throws an exception the context is not unique.
 async def get_open_context_id(websocket):
@@ -237,12 +255,14 @@ async def test_waitForSelector_success(websocket):
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
-    objectID = resp["result"]["objectId"]
-    assert resp == {
-        "id": 17,
-        "result": {
-            "type": "node",
-            "objectId": objectID }}
+    recursiveCompare(
+        resp,
+        {
+            "id": 17,
+            "result": {
+                "type": "node",
+                "objectId": "__any_value__" }},
+        ["objectId"])
 
 @pytest.mark.asyncio
 async def test_waitForSelector_success_slow(websocket):
@@ -294,12 +314,14 @@ async def test_waitForSelector_success_slow(websocket):
 
 # 5. Assert element found.
     resp = await read_JSON_message(websocket)
-    objectID = resp["result"]["objectId"]
-    assert resp == {
-        "id": 20,
-        "result": {
-            "type": "node",
-            "objectId": objectID }}
+    recursiveCompare(
+        resp,
+        {
+            "id": 20,
+            "result": {
+                "type": "node",
+                "objectId": "__any_value__" }},
+        ["objectId"])
 
 @pytest.mark.asyncio
 async def test_waitForHiddenSelector_success(websocket):
@@ -425,12 +447,14 @@ async def test_selectElement_success(websocket):
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
-    objectID = resp["result"]["objectId"]
-    assert resp == {
-        "id": 28,
-        "result": {
-            "type": "node",
-            "objectId": objectID }}
+    recursiveCompare(
+        resp,
+        {
+            "id": 28,
+                "result": {
+                    "type": "node",
+                    "objectId": "__any_value__" }},
+        ["objectId"])
 
 @pytest.mark.asyncio
 async def test_selectElementMissingElement_missingElement(websocket):
@@ -550,29 +574,29 @@ async def test_consoleLog_logEntryAddedEventEmmited(websocket):
 
     # Assert "log.entryAdded" event emitted.
     resp = await read_JSON_message(websocket)
-    timestamp = resp["params"]["timestamp"]
-    url =  resp["params"]["stackTrace"][0]["url"]
-
-    assert resp == {
-        "method":"log.entryAdded",
-        "params":{
-            # BaseLogEntry
-            "level":"info",
-            "text":"some log message",
-            "timestamp":timestamp,
-            "stackTrace":[{
-                "url":url,
-                "functionName":"",
-                "lineNumber":0,
-                "columnNumber":8}],
-            # ConsoleLogEntry
-            "type": "console",
-            "method": "log",
-            # TODO: replace `PROTO.context` with `realm`.
-            "PROTO.context":contextID,
-            "args":[{
-                "type":"string",
-                "value":"some log message"}]}}
+    recursiveCompare(
+        resp,
+        {
+            "method":"log.entryAdded",
+            "params":{
+                # BaseLogEntry
+                "level":"info",
+                "text":"some log message",
+                "timestamp":"__any_value__",
+                "stackTrace":[{
+                    "url":"__any_value__",
+                    "functionName":"",
+                    "lineNumber":0,
+                    "columnNumber":8}],
+                # ConsoleLogEntry
+                "type": "console",
+                "method": "log",
+                # TODO: replace `PROTO.context` with `realm`.
+                "PROTO.context":contextID,
+                "args":[{
+                    "type":"string",
+                    "value":"some log message"}]}},
+        ["timestamp", "url"])
 
     # Assert command done.
     resp = await read_JSON_message(websocket)
@@ -687,7 +711,7 @@ async def test_consoleError_logEntryWithMethodErrorEmmited(websocket):
         "result":{"type":"undefined"}}
 
 # Testing serialisation.
-async def assertSerialisation(jsStrObject, expectedSerialisedObject, hasObjectId, websocket):
+async def assertSerialisation(jsStrObject, expectedSerialisedObject, websocket):
     contextID = await get_open_context_id(websocket)
 
     # Send command.
@@ -702,26 +726,22 @@ async def assertSerialisation(jsStrObject, expectedSerialisedObject, hasObjectId
     resp = await read_JSON_message(websocket)
     assert resp["id"] == 9997
 
-    # Enrich expected result with `objectId` if needed.
-    if hasObjectId:
-        objectId = resp["result"]["objectId"]
-        expectedSerialisedObject["objectId"] = objectId
-
-    assert resp["result"] == expectedSerialisedObject
+    # Compare ignoring `objectId`.
+    recursiveCompare(expectedSerialisedObject, resp["result"], ["objectId"])
 
 @pytest.mark.asyncio
 async def test_serialisation_undefined(websocket):
     await assertSerialisation(
         "undefined",
         {"type":"undefined"},
-        False, websocket)
+        websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_null(websocket):
     await assertSerialisation(
         "null",
         {"type":"null"},
-        False, websocket)
+        websocket)
 
 # TODO: test escaping, null bytes string, lone surrogates.
 @pytest.mark.asyncio
@@ -731,7 +751,7 @@ async def test_serialisation_string(websocket):
         {
             "type":"string",
             "value":"someStr"},
-        False, websocket)
+        websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_number(websocket):
@@ -740,13 +760,13 @@ async def test_serialisation_number(websocket):
         {
             "type":"number",
             "value":123},
-        False, websocket)
+        websocket)
     await assertSerialisation(
         "0.56",
         {
             "type":"number",
             "value":0.56},
-        False, websocket)
+        websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_specialNumber(websocket):
@@ -755,25 +775,25 @@ async def test_serialisation_specialNumber(websocket):
         {
             "type":"number",
             "value":"+Infinity"},
-        False, websocket)
+        websocket)
     await assertSerialisation(
         "-Infinity",
         {
             "type":"number",
             "value":"-Infinity"},
-        False, websocket)
+        websocket)
     await assertSerialisation(
         "-0",
         {
             "type":"number",
             "value":"-0"},
-        False, websocket)
+        websocket)
     await assertSerialisation(
         "NaN",
         {
             "type":"number",
             "value":"NaN"},
-        False, websocket)
+        websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_bool(websocket):
@@ -782,13 +802,13 @@ async def test_serialisation_bool(websocket):
         {
             "type":"boolean",
             "value":True},
-        False, websocket)
+        websocket)
     await assertSerialisation(
         "false",
         {
             "type":"boolean",
             "value":False},
-        False, websocket)
+        websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_bigint(websocket):
@@ -797,7 +817,7 @@ async def test_serialisation_bigint(websocket):
         {
             "type":"bigint",
             "value":"12345678901234567890"},
-        False, websocket)
+        websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_symbol(websocket):
@@ -805,16 +825,20 @@ async def test_serialisation_symbol(websocket):
         "Symbol('foo')",
         {
             "type":"symbol",
-            "PROTO.description":"foo"
-            },
-        True, websocket)
+            "PROTO.description":"foo",
+            "objectId":"__any_value__"
+        },
+        websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_function(websocket):
     await assertSerialisation(
         "function(){}",
-        {"type":"function"},
-        True, websocket)
+        {
+            "type":"function",
+            "objectId":"__any_value__"
+        },
+        websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_regExp(websocket):
@@ -822,8 +846,10 @@ async def test_serialisation_regExp(websocket):
         "new RegExp('ab+c')",
         {
             "type":"regexp",
-            "value":"/ab+c/"},
-        True, websocket)
+            "value":"/ab+c/",
+            "objectId":"__any_value__"
+        },
+        websocket)
 
 # TODO: check timezone serialisation.
 @pytest.mark.asyncio
@@ -832,74 +858,127 @@ async def test_serialisation_date(websocket):
         "new Date('2021-02-18T13:53:00+0200')",
         {
             "type":"date",
-            "value":"Thu Feb 18 2021 11:53:00 GMT+0000 (Coordinated Universal Time)"},
-        True, websocket)
+            "value":"Thu Feb 18 2021 11:53:00 GMT+0000 (Coordinated Universal Time)",
+            "objectId":"__any_value__"},
+        websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_windowProxy(websocket):
     await assertSerialisation(
         "this.window",
-        {"type":"window"},
-        True, websocket)
+        {
+            "type":"window",
+            "objectId":"__any_value__"
+        },
+        websocket)
 
 @pytest.mark.asyncio
 async def test_serialisation_error(websocket):
     await assertSerialisation(
         "new Error('Woops!')",
-        {"type":"error"},
-        True, websocket)
+        {
+            "type":"error",
+            "objectId":"__any_value__"
+        },
+        websocket)
+
+# TODO: implement after serialisation MaxDepth logic specified:
+# https://github.com/w3c/webdriver-bidi/issues/86
+@pytest.mark.asyncio
+async def test_serialisation_array(websocket):
+    await assertSerialisation(
+        "[1, 'a', {foo: 'bar'}, [2,[3,4]]]",
+        {
+            "type":"array",
+            "objectId":"__any_value__",
+            "value":[{
+                "type":"number",
+                "value":1
+            },{
+                "type":"string",
+                "value":"a"
+            },{
+                "type":"object",
+                "objectId":"__any_value__"
+            },{
+                "type":"array",
+                "objectId":"__any_value__"}]},
+        websocket)
+
+# TODO: implement after serialisation MaxDepth logic specified:
+# https://github.com/w3c/webdriver-bidi/issues/86
+@pytest.mark.asyncio
+async def test_serialisation_object(websocket):
+    await assertSerialisation(
+        "{'foo': {'bar': 'baz'}, 'qux': 'quux'}",
+        {
+            "type":"object",
+            "objectId":"__any_value__",
+            "value":[[
+                "foo", {
+                    "type":"object",
+                    "objectId":"__any_value__"}],[
+                "qux", {
+                    "type":"string",
+                    "value":"quux"}]]},
+        websocket)
 
 # TODO: add `NodeProperties` after serialisation MaxDepth logic specified:
 # https://github.com/w3c/webdriver-bidi/issues/86.
 @pytest.mark.asyncio
 async def test_serialisation_node(websocket):
-    await assertSerialisation(
-        "document.createElement('p')",
-        {"type":"node"},
-        True, websocket)
+    contextID = await get_open_context_id(websocket)
+    await goto_url(websocket, contextID,
+        "data:text/html,<div some_attr_name='some_attr_value' ><h2>test</h2></div>")
 
-# # TODO: implement after serialisation MaxDepth logic specified:
-# # https://github.com/w3c/webdriver-bidi/issues/86
-# @pytest.mark.asyncio
-# async def test_serialisation_array(websocket):
-#     await assertSerialisation(
-#         "[1, 'a', {foo: 'bar'}, [2,3]]]",
-#         {
-#             "type":"array",
-#             "PROTO.length": 4
-#             "value": [{
-#                 "type":"number",
-#                 "value":123
-#             }, {
-#                 "type":"string",
-#                 "value":"a"
-#             }, {
-#                 "type":"object",
-#                 "objectId": "someObjectId"
-#             }, {
-#                 "type":"array",
-#                 "PROTO.length": 2,
-#                 "objectId": "anotherObjectId"
-#             }]
-#         },
-#         True, websocket)
+    # Send command.
+    await send_JSON_command(websocket, {
+        "id": 47,
+        "method": "PROTO.browsingContext.waitForSelector",
+        "params": {
+            "selector": "body > div",
+            "context": contextID}})
 
-# # TODO: implement after serialisation MaxDepth logic specified:
-# # https://github.com/w3c/webdriver-bidi/issues/86
-# @pytest.mark.asyncio
-# async def test_serialisation_object(websocket):
-#     await assertSerialisation(
-#         "{'foo': {'bar': 'baz'}}",
-#         {
-#             "type":"object",
-#             "PROTO.length": 1,
-#             "value":{
-#                 "type":"object",
-#                 "PROTO.length": 1,
-#                 "value":""
-#             },
-#         },
-#         True, websocket)
+    # Assert command done.
+    resp = await read_JSON_message(websocket)
+    assert resp["id"]==47
+    objectId=resp["result"]["objectId"]
+
+    await send_JSON_command(websocket, {
+        "id": 48,
+        "method": "PROTO.page.evaluate",
+        "params": {
+            "function": "element => element",
+    # TODO: send properly serialised element according to
+    # https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
+            "args": [{
+                "objectId": objectId}],
+            "context": contextID}})
+
+    # Assert result.
+    resp = await read_JSON_message(websocket)
+    recursiveCompare({
+        "id":48,
+        "result":{
+            "type":"node",
+            "objectId":"__any_value__",
+            "value":{
+                "nodeType":1,
+                "nodeValue":None,
+                "localName":"div",
+                "namespaceURI":"http://www.w3.org/1999/xhtml",
+                "childNodeCount":1,
+                "children":[{
+                    "type":"node",
+                    "objectId":"__any_value__"}],
+                "attributes":[{
+                    "name":"some_attr_name",
+                    "value":"some_attr_value"}]}}},
+    resp, ["objectId"])
+
+
+
+
 
 # TODO: implement proper serialisation according to
 # https://w3c.github.io/webdriver-bidi/#data-types-remote-value.

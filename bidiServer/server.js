@@ -79,7 +79,7 @@ function matchData(data) {
   }
 
   // Extract amd validate id, method and params.
-  const {id, method, params} = parsed;
+  const { id, method, params } = parsed;
 
   const idType = jsonType(id);
   if (idType !== 'number' || !Number.isInteger(id) || id < 0) {
@@ -98,7 +98,7 @@ function matchData(data) {
     throw new Error(`Expected object params but got ${paramsType}`);
   }
 
-  return {id, method, params};
+  return { id, method, params };
 }
 
 function getErrorResponse(plainCommandData, errorCode, errorMessage) {
@@ -126,47 +126,109 @@ function sendClientMessage(message, connection) {
   connection.sendUTF(messageStr);
 }
 
-function isPrimitive(obj) {
-  if (!obj._remoteObject)
-    return true;
+async function collectProperties(obj, page, depth, mapKeyValueToProperties) {
+  debugBiDiServer("collectProperties, depth", depth);
 
-  if (!["object", "function", "wasm"].includes(obj._remoteObject.type))
-    return true;
+  if (depth <= 0)
+    return undefined;
+  // `Runtime.getProperties` under the hood.
+  const properties = await obj.getProperties();
 
-  if (obj._remoteObject.subtype && [
-    "null",
-    "regexp",
-    "date",
-    "error",
-    "i32",
-    "i64",
-    "f32",
-    "f64",
-    "v128"].includes(obj._remoteObject.subtype))
-    return true;
-
-  return false;
+  const result = [];
+  for (const [key, value] of properties.entries()) {
+    // Get keys as remote values.
+    const serialisedNestedValue = await serializeForBiDi(value, page, depth - 1);
+    result.push(mapKeyValueToProperties(key, serialisedNestedValue));
+  }
+  return result;
 }
 
-async function serializeForBiDi(obj) {
+async function getNodeValue(nodeHandle, page, depth) {
+  if (depth <= 0)
+    return undefined;
+
+  const nodeAggregatedInfo = await page.evaluate(function (node) {
+    return {
+      nodeType: node.nodeType,
+      nodeValue: node.nodeValue,
+      localName: node.localName,
+      namespaceURI: node.namespaceURI,
+      childNodeCount: node.childElementCount,
+      attributesCount: node.attributes.length,
+      hasShadowRoot: !!node.shadowRoot,
+    };
+  }, nodeHandle);
+
+  // TODO: replace with using `DOM.describeNode`:
+  // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-describeNode
+  // Race condition is possible.
+  const children = [];
+  for (let i = 0; i < nodeAggregatedInfo.childNodeCount; i++) {
+    const childInfo = await page.evaluateHandle(
+      (node, i) => node.children[i],
+      nodeHandle, i);
+    // TODO: consider adding `description`.
+    children.push(await serializeForBiDi(childInfo, page, depth - 1));
+  }
+
+  // TODO: replace with using `DOM.getAttributes`:
+  // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-getAttributes
+  // Race condition is possible.
+  const attributes = [];
+  for (let i = 0; i < nodeAggregatedInfo.attributesCount; i++) {
+    const attributeInfo = await page.evaluate(
+      (node, i) => ({
+        name: node.attributes[i].name,
+        value: node.attributes[i].value
+      }),
+      nodeHandle, i);
+    attributes.push(attributeInfo);
+  }
+
+  // Race condition is possible.
+  let shadowRoot = undefined;
+  if (nodeAggregatedInfo.hasShadowRoot) {
+    const shadowRootHandle = await page.evaluateHandle(node => node.shadowRoot, nodeHandle);
+    shadowRoot = await serializeForBiDi(shadowRootHandle, page, depth - 1);
+  }
+
+  return {
+    nodeType: nodeAggregatedInfo.nodeType,
+    nodeValue: nodeAggregatedInfo.nodeValue,
+    localName: nodeAggregatedInfo.localName,
+    namespaceURI: nodeAggregatedInfo.namespaceURI,
+    childNodeCount: nodeAggregatedInfo.childNodeCount,
+    children,
+    attributes,
+    shadowRoot
+  };
+}
+
+async function serializeForBiDi(objectHandle, page, depth = 1) {
   // TODO: implement proper serialisation according to
   // https://w3c.github.io/webdriver-bidi/#data-types-remote-value.
 
-  debugBiDiServer("serializeForBiDi", obj);
+  debugBiDiServer("serializeForBiDi", objectHandle, "depth", depth);
 
-  if (obj._remoteObject) {
-    if (obj._remoteObject.type === 'undefined') {
+  if (objectHandle._remoteObject) {
+    if (objectHandle._remoteObject.type === 'undefined') {
       return { type: "undefined" };
     }
-    if (obj._remoteObject.type === "string") {
+    if (objectHandle._remoteObject.type === 'boolean') {
       return {
-        type: "string",
-        value: obj._remoteObject.value
+        type: "boolean",
+        value: objectHandle._remoteObject.value
       };
     }
-    if (obj._remoteObject.type === "number") {
-      if (obj._remoteObject.unserializableValue) {
-        if (obj._remoteObject.unserializableValue === "Infinity") {
+    if (objectHandle._remoteObject.type === "string") {
+      return {
+        type: "string",
+        value: objectHandle._remoteObject.value
+      };
+    }
+    if (objectHandle._remoteObject.type === "number") {
+      if (objectHandle._remoteObject.unserializableValue) {
+        if (objectHandle._remoteObject.unserializableValue === "Infinity") {
           return {
             type: "number",
             value: "+Infinity"
@@ -175,96 +237,105 @@ async function serializeForBiDi(obj) {
 
         return {
           type: "number",
-          value: obj._remoteObject.unserializableValue
+          value: objectHandle._remoteObject.unserializableValue
         };
       }
       return {
         type: "number",
-        value: obj._remoteObject.value
+        value: objectHandle._remoteObject.value
       };
     }
 
-    if (obj._remoteObject.type === "bigint") {
+    if (objectHandle._remoteObject.type === "bigint") {
       return {
         type: "bigint",
         // `unserializableValue` has a trailing `n` like `123n`. It should not
         // be in the BiDi serialised value. Remove trailing `n`.
-        value: obj._remoteObject.unserializableValue.replace(/n$/, "")
+        value: objectHandle._remoteObject.unserializableValue.replace(/n$/, "")
       };
     }
 
-    if (obj._remoteObject.type === "symbol") {
+    if (objectHandle._remoteObject.type === "symbol") {
       // CDP description has a format 'Symbol(foo)',
       // while BiDi should contain only`foo`.
-      const description = obj._remoteObject.description
+      const description = objectHandle._remoteObject.description
         .match(/^Symbol\((.*)\)$/)[1];
 
       return {
         type: "symbol",
-        objectId: obj._remoteObject.objectId,
+        objectId: objectHandle._remoteObject.objectId,
         "PROTO.description": description
       };
     }
 
-    if (obj._remoteObject.type === "function") {
+    if (objectHandle._remoteObject.type === "function") {
       return {
         type: "function",
-        objectId: obj._remoteObject.objectId,
+        objectId: objectHandle._remoteObject.objectId,
       };
     }
 
-    if (obj._remoteObject.type === "object") {
-      if (obj._remoteObject.subtype === "null") {
+    if (objectHandle._remoteObject.type === "object") {
+      if (objectHandle._remoteObject.subtype === "null") {
         return { type: "null" };
       }
-      if (obj._remoteObject.subtype === "regexp") {
+      if (objectHandle._remoteObject.subtype === "regexp") {
         return {
           type: "regexp",
-          objectId: obj._remoteObject.objectId,
-          value: obj._remoteObject.description
+          objectId: objectHandle._remoteObject.objectId,
+          value: objectHandle._remoteObject.description
         };
       }
-      if (obj._remoteObject.subtype === "date") {
+      if (objectHandle._remoteObject.subtype === "date") {
         return {
           type: "date",
-          objectId: obj._remoteObject.objectId,
-          value: new Date(obj._remoteObject.description).toString()
+          objectId: objectHandle._remoteObject.objectId,
+          value: new Date(objectHandle._remoteObject.description).toString()
         };
       }
-      if (obj._remoteObject.subtype === "error") {
+      if (objectHandle._remoteObject.subtype === "error") {
         return {
           type: "error",
-          objectId: obj._remoteObject.objectId
+          objectId: objectHandle._remoteObject.objectId
         };
       }
-      if (obj._remoteObject.subtype === "node") {
+      if (objectHandle._remoteObject.subtype === "node") {
+        const value = await getNodeValue(objectHandle, page, depth);
         return {
           type: "node",
-          objectId: obj._remoteObject.objectId,
-          // TODO: add value?: NodeProperties.
-          // https://w3c.github.io/webdriver-bidi/#type-common-RemoteValue
+          objectId: objectHandle._remoteObject.objectId,
+          value
         };
       }
-      if (obj._remoteObject.className === "Window") {
+      if (objectHandle._remoteObject.className === "Window") {
         return {
           type: "window",
-          objectId: obj._remoteObject.objectId
+          objectId: objectHandle._remoteObject.objectId
+        };
+      }
+      if (objectHandle._remoteObject.className === "Array") {
+        const value = await collectProperties(objectHandle, page, depth, (key, value) => value);
+        return {
+          type: "array",
+          objectId: objectHandle._remoteObject.objectId,
+          value: value
+        };
+      }
+      if (objectHandle._remoteObject.className === "Object") {
+        const value = await collectProperties(objectHandle, page, depth, (key, value) => [key, value]);
+        return {
+          type: "object",
+          objectId: objectHandle._remoteObject.objectId,
+          value: value
         };
       }
     }
   }
 
-  if (isPrimitive(obj)) {
-    const val = await obj.jsonValue();
-    return {
-      type: typeof val,
-      value: val
-    };
-  }
-
+   // TODO: consider throwing exception.
   return {
-    type: "object",
-    objectId: obj._remoteObject.objectId,
+    type: "unsupportedObject",
+    objectId: objectHandle._remoteObject.objectId,
   };
 }
 
@@ -336,6 +407,7 @@ wsServer.on('request', async function (request) {
     processCommand(commandData, session).then(response => {
       sendClientMessage(response, session.connection)
     }).catch(e => {
+      debugBiDiServer("exception", e);
       respondWithError(session.connection, plainCommandData, "unknown error", e.message);
     });
   });
@@ -412,7 +484,7 @@ function addPageEventHandlers(pageID, page, connection) {
   });
 
   page.on('console', async msg => {
-    handle_pageConsole_event(msg, pageID, connection);
+    handle_pageConsole_event(msg, pageID, page, connection);
   });
 }
 
@@ -589,7 +661,7 @@ async function process_PROTO_page_evaluate(params, session, response) {
   }
 
   const result = await page.evaluateHandle.apply(page, args);
-  response.result = await serializeForBiDi(result);
+  response.result = await serializeForBiDi(result, page);
 
   return response;
 }
@@ -649,10 +721,10 @@ function handle_pageLoad_event(pageID, connection) {
     }
   }, connection);
 }
-async function handle_pageConsole_event(msg, pageID, connection) {
+async function handle_pageConsole_event(msg, pageID, page, connection) {
   const args = await Promise.all(
     msg.args()
-      .map(serializeForBiDi));
+      .map(arg => serializeForBiDi(arg, page)));
 
   // TODO: handle `console.log('%s %s', 'foo', 'bar')` case.
   const text = msg.args()
